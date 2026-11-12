@@ -1,6 +1,10 @@
 name: refresh-data
 on:
-  schedule: [{cron: "0 8 * * *"}]
+  schedule:
+    - cron: "0 8 * * *"          # codziennie rano
+    - cron: "0 20,23 * * 3-5"    # środa-piątek: raporty kontuzji
+    - cron: "*/30 15-23 * * 0"   # niedziela: co 30 min przed meczami
+    - cron: "*/30 22-23 * * 1,4" # poniedziałek i czwartek: przed meczem wieczornym
   workflow_dispatch:
 permissions: {contents: write}
 jobs:

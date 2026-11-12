@@ -6,6 +6,7 @@ import polars as pl
 
 SEASONS = [2025, 2026]
 POS = ["QB", "RB", "WR", "TE"]
+TOP = {"QB": 3, "RB": 6, "WR": 9, "TE": 5}  # ilu zawodników na pozycję w depth chart
 STAT = ["completions", "attempts", "passing_yards", "passing_tds", "carries",
         "rushing_yards", "targets", "receptions", "receiving_yards", "receiving_tds"]
 OUT = Path(__file__).resolve().parents[1] / "web" / "public" / "data"
@@ -28,7 +29,7 @@ players = (df.group_by("player_id")
              .agg(pl.col("player_display_name").last().alias("name"),
                   pl.col("position").last().alias("pos"),
                   pl.col("team").last().alias("team"), pl.len().alias("games"))
-             .filter(pl.col("games") >= 6).sort("name"))
+             .filter(pl.col("games") >= 1).sort("name"))
 (OUT / "players.json").write_text(json.dumps(players.to_dicts()))
 
 keep = set(players["player_id"].to_list())
@@ -48,4 +49,95 @@ for team in cur["opponent_team"].unique().to_list():
     (OUT / "defense" / f"{team}.json").write_text(json.dumps({
         "allowed": {r["position"]: {c: r[c] for c in stats} for r in allowed.to_dicts()},
         "recent": recent.sort(["week"], descending=True).select(base + stats).to_dicts()}))
-print("gotowe:", len(keep), "zawodników")
+
+# --- terminarz: najbliższa kolejka ---
+season = int(df["season"].max())
+sch = (nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG")
+          .with_columns(pl.col("gameday").cast(pl.Utf8)))
+todo = sch.filter(pl.col("home_score").is_null())
+games = []
+if todo.height:
+    s = todo["season"].min()
+    w = todo.filter(pl.col("season") == s)["week"].min()
+    games = (todo.filter((pl.col("season") == s) & (pl.col("week") == w))
+                 .select(["game_id", "season", "week", "gameday", "away_team", "home_team"]).to_dicts())
+(OUT / "schedule.json").write_text(json.dumps(games))
+
+# --- statusy: raport kontuzji (OUT / D / Q) i lista rezerwowa kontuzjowanych (IR) ---
+LAB = {"out": "OUT", "doubtful": "D", "questionable": "Q"}
+status = {}  # gsis_id -> {"status", "injury"}
+try:
+    inj = nfl.load_injuries([season]).filter(pl.col("season_type") == "REG")
+    weeks = inj["week"].unique().to_list()
+    wk = games[0]["week"] if games and games[0]["week"] in weeks else inj["week"].max()
+    for r in inj.filter(pl.col("week") == wk).to_dicts():
+        st = LAB.get(str(r.get("report_status") or "").strip().lower())
+        if st and r.get("gsis_id"):
+            status[r["gsis_id"]] = {"status": st, "injury": r.get("report_primary_injury") or ""}
+    print("raport kontuzji: tydzień", wk, "-", len(status), "zawodników ze statusem")
+except Exception as e:
+    print("brak raportu kontuzji:", e)
+try:
+    ros = nfl.load_rosters_weekly([season])
+    ros = ros.filter(pl.col("week") == ros["week"].max())
+    print("statusy w rosterze (sprawdź, który oznacza IR):", ros["status"].unique().to_list())
+    for r in ros.filter(pl.col("status") == "RES").to_dicts():
+        status[r["gsis_id"]] = {"status": "IR", "injury": ""}
+except Exception as e:
+    print("brak rosterów tygodniowych:", e)
+
+# --- ESPN (nieoficjalne API): depth chart i statusy; nadpisują dane nflverse ---
+depth_raw = {}
+try:
+    from espn import fetch_espn
+    depth_raw, esp_status = fetch_espn(season, players, TOP)
+    status.update(esp_status)
+    print("ESPN: depth chart dla", len(depth_raw), "drużyn,", len(esp_status), "statusów")
+except Exception as e:
+    print("ESPN niedostępny, zostają dane nflverse:", e)
+
+def entry(pid, name, **kw):
+    st = status.get(pid, {})
+    return {"player_id": pid, "name": name, "status": st.get("status", ""), "injury": st.get("injury", ""), **kw}
+
+# --- depth chart: oficjalny z nflverse, a gdy niedostępny - ranking według użycia z 4 meczów ---
+depth = {t: {p: [entry(i, n) for i, n in l] for p, l in d.items()} for t, d in depth_raw.items()}
+try:
+    if depth:
+        raise RuntimeError('ESPN już dostarczył depth chart')
+    dc = nfl.load_depth_charts([season]).filter(pl.col("position").is_in(POS))
+    dc = dc.filter(pl.col("dt") == pl.col("dt").max().over("team")).sort(["pos_rank", "pos_slot"])
+    for team in dc["team"].unique().to_list():
+        t = dc.filter(pl.col("team") == team)
+        depth[team] = {p: [entry(r["gsis_id"], r["player_name"]) for r in
+                           t.filter(pl.col("position") == p).unique(subset=["gsis_id"], keep="first", maintain_order=True)
+                            .head(n).to_dicts()] for p, n in TOP.items()}
+    print("depth chart: oficjalny,", len(depth), "drużyn")
+except Exception as e:
+    print("oficjalny depth chart niedostępny:", e)
+if not depth:
+    usage = (pl.when(pl.col("position") == "QB").then(pl.col("attempts"))
+               .when(pl.col("position") == "RB").then(pl.col("carries") + pl.col("targets"))
+               .otherwise(pl.col("targets")))
+    for team in cur["team"].unique().to_list():
+        t = cur.filter(pl.col("team") == team)
+        t = t.filter(pl.col("week") > t["week"].max() - 4).with_columns(usage.alias("usage"))
+        u = t.group_by("player_id").agg(pl.col("player_display_name").last().alias("name"),
+                                        pl.col("position").last().alias("pos"),
+                                        pl.col("usage").mean().round(1).alias("usage"))
+        depth[team] = {p: [entry(r["player_id"], r["name"], usage=r["usage"]) for r in
+                           u.filter(pl.col("pos") == p).sort("usage", descending=True).head(n).to_dicts()]
+                       for p, n in TOP.items()}
+    print("depth chart: zastępczy (użycie z ostatnich 4 meczów)")
+# --- zawodnicy na IR nie są w depth chartach: dopisujemy ich na koniec listy pozycji ---
+rows = {r["player_id"]: r for r in players.to_dicts()}
+added = []
+for pid, st in status.items():
+    r = rows.get(pid)
+    lst = depth.get(r["team"], {}).get(r["pos"]) if r else None
+    if st["status"] == "IR" and lst is not None and all(x["player_id"] != pid for x in lst):
+        lst.append(entry(pid, r["name"]))
+        added.append(f'{r["team"]}: {r["name"]}')
+print("IR dopisani z nflverse:", added)
+(OUT / "depth.json").write_text(json.dumps(depth))
+print("gotowe:", len(keep), "zawodników,", len(games), "meczów w najbliższej kolejce")
