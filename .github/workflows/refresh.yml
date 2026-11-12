@@ -1,0 +1,16 @@
+name: refresh-data
+on:
+  schedule: [{cron: "0 8 * * *"}]
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r ingest/requirements.txt && python ingest/build_data.py
+      - run: |
+          git config user.name "data-bot" && git config user.email "bot@users.noreply.github.com"
+          git add web/public/data && (git commit -m "odświeżenie danych" && git push) || echo "bez zmian"
