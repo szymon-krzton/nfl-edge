@@ -1,0 +1,1 @@
+{"routes": {"SCREEN": {"targets": 2, "share": 100.0}}, "cov": {"MAN": {"targets": 1, "rec": 1.0, "yds": 10.0, "td": 0.0, "epa": 0.59}, "COVER_1": {"targets": 1, "rec": 1.0, "yds": 10.0, "td": 0.0, "epa": 0.59}, "ZONE": {"targets": 1, "rec": 1.0, "yds": 1.0, "td": 0.0, "epa": -0.73}, "COVER_2": {"targets": 1, "rec": 1.0, "yds": 1.0, "td": 0.0, "epa": -0.73}}, "pass": {}}

@@ -1,0 +1,1 @@
+{"routes": {"GO": {"targets": 1, "share": 100.0}}, "cov": {"OTHER": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -2.68}, "ZONE": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -2.68}}, "pass": {}}

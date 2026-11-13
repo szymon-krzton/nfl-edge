@@ -1,0 +1,1 @@
+{"routes": {"IN/DIG": {"targets": 1, "share": 50.0}, "GO": {"targets": 1, "share": 50.0}}, "cov": {"COVER_4": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.41}, "ZONE": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.41}}, "pass": {}}

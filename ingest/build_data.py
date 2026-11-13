@@ -4,11 +4,11 @@ from pathlib import Path
 import nflreadpy as nfl
 import polars as pl
 
-SEASONS = [2025, 2026]
+SEASONS = [2023, 2024, 2025, 2026]
 POS = ["QB", "RB", "WR", "TE"]
 TOP = {"QB": 3, "RB": 6, "WR": 9, "TE": 5}  # ilu zawodników na pozycję w depth chart
 STAT = ["completions", "attempts", "passing_yards", "passing_tds", "carries",
-        "rushing_yards", "targets", "receptions", "receiving_yards", "receiving_tds"]
+        "rushing_yards", "targets", "receptions", "receiving_yards", "receiving_tds", "rushing_tds", "passing_interceptions"]
 OUT = Path(__file__).resolve().parents[1] / "web" / "public" / "data"
 (OUT / "logs").mkdir(parents=True, exist_ok=True)
 (OUT / "defense").mkdir(parents=True, exist_ok=True)
@@ -39,6 +39,30 @@ for key, g in parts.items():
     (OUT / "logs" / f"{pid}.json").write_text(json.dumps(g.select(base + stats).to_dicts()))
 
 cur = df.filter(pl.col("season") == df["season"].max())
+
+# --- historyczna pozycja w depth chartcie: ostatni zapis z nflverse sprzed daty meczu ---
+hist_rank = None
+try:
+    TFIX = {"LAR": "LA", "WSH": "WAS", "JAC": "JAX", "OAK": "LV", "SD": "LAC", "STL": "LA", "ARZ": "ARI",
+            "BLT": "BAL", "CLV": "CLE", "HST": "HOU"}
+    cs = int(df["season"].max())
+    dch = (nfl.load_depth_charts([cs]).filter(pl.col("position").is_in(POS), pl.col("gsis_id").is_not_null())
+             .with_columns(pl.col("team").replace(TFIX), pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64),
+                           pl.col("dt").cast(pl.Utf8).alias("dts")))
+    sc = nfl.load_schedules([cs]).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
+    gd = (pl.concat([sc.select(["season", "week", pl.col("home_team").alias("team"), "gameday"]),
+                     sc.select(["season", "week", pl.col("away_team").alias("team"), "gameday"])])
+            .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
+    k = ["season", "week", "team"]
+    dch = (dch.join(gd, on=k, how="inner").filter(pl.col("dts").str.slice(0, 10) <= pl.col("gameday"))
+              .filter(pl.col("dts") == pl.col("dts").max().over(k))
+              .sort(["pos_rank", "pos_slot"])
+              .unique(subset=k + ["position", "gsis_id"], keep="first", maintain_order=True)
+              .with_columns((pl.int_range(pl.len()).over(k + ["position"]) + 1).alias("depth_rank")))
+    hist_rank = dch.select(k + ["position", pl.col("gsis_id").alias("player_id"), "depth_rank"])
+    print("historyczny depth chart:", hist_rank.height, "rekordów")
+except Exception as e:
+    print("brak historycznego depth chartu (użyję obecnego):", e)
 for team in cur["opponent_team"].unique().to_list():
     sub = cur.filter(pl.col("opponent_team") == team)
     weeks = sorted(sub["week"].unique().to_list())[-8:]
@@ -46,9 +70,12 @@ for team in cur["opponent_team"].unique().to_list():
     allowed = (sub.group_by(["week", "position"]).agg([pl.col(c).sum() for c in stats])
                   .group_by("position").agg([pl.col(c).mean().round(1) for c in stats]))
     recent = sub.filter((pl.col("attempts") >= 10) | (pl.col("carries") >= 5) | (pl.col("targets") >= 3))
+    if hist_rank is not None:
+        recent = recent.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)).join(
+            hist_rank, on=["season", "week", "team", "position", "player_id"], how="left")
     (OUT / "defense" / f"{team}.json").write_text(json.dumps({
         "allowed": {r["position"]: {c: r[c] for c in stats} for r in allowed.to_dicts()},
-        "recent": recent.sort(["week"], descending=True).select(base + stats).to_dicts()}))
+        "recent": recent.sort(["week"], descending=True).select(["player_id"] + base + stats + (["depth_rank"] if "depth_rank" in recent.columns else [])).to_dicts()}))
 
 # --- terminarz: najbliższa kolejka ---
 season = int(df["season"].max())
@@ -141,3 +168,24 @@ for pid, st in status.items():
 print("IR dopisani z nflverse:", added)
 (OUT / "depth.json").write_text(json.dumps(depth))
 print("gotowe:", len(keep), "zawodników,", len(games), "meczów w najbliższej kolejce")
+
+# --- usage: targety i carries w kolejnych meczach drużyn (bieżący sezon) ---
+usage_out = {}
+for team in cur["team"].unique().to_list():
+    t = cur.filter(pl.col("team") == team)
+    rows = {}
+    for r in t.select(["player_id", "player_display_name", "position", "week", "targets", "carries"]).to_dicts():
+        d = rows.setdefault(r["player_id"], {"player_id": r["player_id"], "name": r["player_display_name"],
+                                             "pos": r["position"], "g": {}})
+        d["g"][r["week"]] = [int(r["targets"] or 0), int(r["carries"] or 0)]
+    usage_out[team] = {"weeks": sorted(t["week"].unique().to_list()),
+                       "players": [p for p in rows.values() if any(v[0] or v[1] for v in p["g"].values())]}
+(OUT / "usage.json").write_text(json.dumps(usage_out))
+print("usage:", len(usage_out), "drużyn")
+
+# --- coverage i ścieżki (FTN / nflverse); opcjonalne, nie blokuje reszty danych ---
+try:
+    from coverage_data import build_coverage
+    build_coverage(OUT)
+except Exception as e:
+    print("dane o coverage pominięte:", e)

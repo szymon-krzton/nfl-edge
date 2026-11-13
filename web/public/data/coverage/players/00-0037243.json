@@ -1,0 +1,1 @@
+{"routes": {"": {"targets": 1, "share": 100.0}}, "cov": {"MAN": {"targets": 1, "rec": 1.0, "yds": 0.0, "td": 0.0, "epa": -0.99}, "2_MAN": {"targets": 1, "rec": 1.0, "yds": 0.0, "td": 0.0, "epa": -0.99}}, "pass": {}}

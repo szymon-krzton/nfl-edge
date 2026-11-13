@@ -1,0 +1,1 @@
+{"routes": {"HITCH/CURL": {"targets": 1, "share": 50.0}, "SWING": {"targets": 1, "share": 50.0}}, "cov": {"OTHER": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": -0.11}, "ZONE": {"targets": 2, "rec": 2.0, "yds": 12.0, "td": 0.0, "epa": 0.02}, "COVER_3": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.15}}, "pass": {}}

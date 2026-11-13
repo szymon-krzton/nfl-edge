@@ -1,0 +1,1 @@
+{"routes": {"DEEP OUT": {"targets": 1, "share": 33.3}, "QUICK OUT": {"targets": 1, "share": 33.3}, "POST": {"targets": 1, "share": 33.3}}, "cov": {"ZONE": {"targets": 3, "rec": 2.0, "yds": 26.0, "td": 0.0, "epa": 0.33}, "COVER_2": {"targets": 3, "rec": 2.0, "yds": 26.0, "td": 0.0, "epa": 0.33}}, "pass": {}}

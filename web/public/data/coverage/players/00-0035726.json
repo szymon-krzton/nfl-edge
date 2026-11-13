@@ -1,0 +1,1 @@
+{"routes": {"QUICK OUT": {"targets": 2, "share": 100.0}}, "cov": {"COVER_4": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.58}, "COVER_2": {"targets": 1, "rec": 1.0, "yds": 12.0, "td": 0.0, "epa": 1.62}, "ZONE": {"targets": 2, "rec": 1.0, "yds": 12.0, "td": 0.0, "epa": 0.52}}, "pass": {}}
