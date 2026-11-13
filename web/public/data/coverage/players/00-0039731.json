@@ -1,1 +1,1 @@
-{"routes": {"SLANT": {"targets": 1, "share": 100.0}}, "cov": {"COVER_0": {"targets": 1, "rec": 1.0, "yds": 0.0, "td": 0.0, "epa": -1.7}, "MAN": {"targets": 1, "rec": 1.0, "yds": 0.0, "td": 0.0, "epa": -1.7}}, "pass": {}}
+{"routes": {"SLANT": {"targets": 1, "share": 100.0}}, "cov": {"MAN": {"targets": 1, "rec": 1.0, "yds": 0.0, "td": 0.0, "epa": -1.7}, "COVER_0": {"targets": 1, "rec": 1.0, "yds": 0.0, "td": 0.0, "epa": -1.7}}, "pass": {}}

@@ -1,1 +1,1 @@
-{"routes": {"HITCH/CURL": {"targets": 1, "share": 50.0}, "QUICK OUT": {"targets": 1, "share": 50.0}}, "cov": {"COVER_2": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.37}, "ZONE": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.37}}, "pass": {}}
+{"routes": {"QUICK OUT": {"targets": 1, "share": 50.0}, "HITCH/CURL": {"targets": 1, "share": 50.0}}, "cov": {"COVER_2": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.37}, "ZONE": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.37}}, "pass": {}}
