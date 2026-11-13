@@ -1,1 +1,1 @@
-{"routes": {"DEEP OUT": {"targets": 1, "share": 100.0}}, "cov": {"OTHER": {"targets": 1, "rec": 1.0, "yds": 18.0, "td": 0.0, "epa": 2.67}, "ZONE": {"targets": 1, "rec": 1.0, "yds": 18.0, "td": 0.0, "epa": 2.67}}, "pass": {}}
+{"routes": {"DEEP OUT": {"targets": 1, "share": 100.0}}, "cov": {"ZONE": {"targets": 1, "rec": 1.0, "yds": 18.0, "td": 0.0, "epa": 2.67}, "OTHER": {"targets": 1, "rec": 1.0, "yds": 18.0, "td": 0.0, "epa": 2.67}}, "pass": {}}

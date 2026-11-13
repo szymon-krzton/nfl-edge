@@ -1,1 +1,1 @@
-{"routes": {"SHALLOW CROSS/DRAG": {"targets": 1, "share": 100.0}}, "cov": {"OTHER": {"targets": 1, "rec": 1.0, "yds": 34.0, "td": 0.0, "epa": 4.33}, "ZONE": {"targets": 1, "rec": 1.0, "yds": 34.0, "td": 0.0, "epa": 4.33}}, "pass": {}}
+{"routes": {"SHALLOW CROSS/DRAG": {"targets": 1, "share": 100.0}}, "cov": {"ZONE": {"targets": 1, "rec": 1.0, "yds": 34.0, "td": 0.0, "epa": 4.33}, "OTHER": {"targets": 1, "rec": 1.0, "yds": 34.0, "td": 0.0, "epa": 4.33}}, "pass": {}}

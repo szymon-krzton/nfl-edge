@@ -1,1 +1,1 @@
-{"routes": {"SWING": {"targets": 1, "share": 50.0}, "TEXAS/ANGLE": {"targets": 1, "share": 50.0}}, "cov": {"COVER_0": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.83}, "MAN": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.83}}, "pass": {}}
+{"routes": {"TEXAS/ANGLE": {"targets": 1, "share": 50.0}, "SWING": {"targets": 1, "share": 50.0}}, "cov": {"COVER_0": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.83}, "MAN": {"targets": 2, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.83}}, "pass": {}}
