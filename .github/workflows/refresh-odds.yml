@@ -1,0 +1,21 @@
+name: refresh-odds
+on:
+  schedule:
+    - cron: "0 9 * * 3,5,0"   # środa, piątek, niedziela rano (UTC) - oszczędza limit 250 zapytań/mies.
+  workflow_dispatch:
+permissions: {contents: write}
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install requests
+      - run: python ingest/odds_data.py
+        env:
+          ODDSPAPI_KEY: ${{ secrets.ODDSPAPI_KEY }}
+      - run: |
+          git config user.name "data-bot" && git config user.email "bot@users.noreply.github.com"
+          git add web/public/data/odds.json
+          (git commit -m "odświeżenie kursów" && git pull --rebase && git push) || echo "bez zmian"

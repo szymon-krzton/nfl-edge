@@ -23,7 +23,15 @@ df = pl.concat(frames, how="diagonal_relaxed")
 stats = [c for c in STAT if c in df.columns]
 df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
         .with_columns([pl.col(c).fill_null(0) for c in stats]))
-base = ["season", "week", "team", "opponent_team", "position", "player_display_name"]
+# daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
+_sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
+gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday"]),
+                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday"])])
+            .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
+df = (df.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64))
+        .join(gdates, on=["season", "week", "team"], how="left").rename({"gameday": "date"}))
+print("mecze bez daty:", df.filter(pl.col("date").is_null()).height)
+base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date"]
 
 players = (df.group_by("player_id")
              .agg(pl.col("player_display_name").last().alias("name"),
@@ -179,6 +187,7 @@ for team in cur["team"].unique().to_list():
                                              "pos": r["position"], "g": {}})
         d["g"][r["week"]] = [int(r["targets"] or 0), int(r["carries"] or 0)]
     usage_out[team] = {"weeks": sorted(t["week"].unique().to_list()),
+                       "dates": {int(w): d for w, d in zip(t["week"].to_list(), t["date"].to_list())},
                        "players": [p for p in rows.values() if any(v[0] or v[1] for v in p["g"].values())]}
 (OUT / "usage.json").write_text(json.dumps(usage_out))
 print("usage:", len(usage_out), "drużyn")
