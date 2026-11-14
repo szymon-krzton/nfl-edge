@@ -1,1 +1,1 @@
-{"routes": {"GO": {"targets": 1, "share": 100.0}}, "cov": {"COVER_0": {"targets": 1, "rec": 1.0, "yds": 4.0, "td": 0.0, "epa": -2.71}, "MAN": {"targets": 1, "rec": 1.0, "yds": 4.0, "td": 0.0, "epa": -2.71}}, "pass": {}}
+{"routes": {"GO": {"targets": 1, "share": 100.0}}, "cov": {"MAN": {"targets": 1, "rec": 1.0, "yds": 4.0, "td": 0.0, "epa": -2.71}, "COVER_0": {"targets": 1, "rec": 1.0, "yds": 4.0, "td": 0.0, "epa": -2.71}}, "pass": {}}

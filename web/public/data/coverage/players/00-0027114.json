@@ -1,1 +1,1 @@
-{"routes": {}, "cov": {}, "pass": {"OTHER": {"dropbacks": 1, "att": 1.0, "cmp": 1.0, "yds": 18.0, "td": 0.0, "int": 0.0, "epa": 2.67}, "ZONE": {"dropbacks": 1, "att": 1.0, "cmp": 1.0, "yds": 18.0, "td": 0.0, "int": 0.0, "epa": 2.67}}}
+{"routes": {}, "cov": {}, "pass": {"ZONE": {"dropbacks": 1, "att": 1.0, "cmp": 1.0, "yds": 18.0, "td": 0.0, "int": 0.0, "epa": 2.67}, "OTHER": {"dropbacks": 1, "att": 1.0, "cmp": 1.0, "yds": 18.0, "td": 0.0, "int": 0.0, "epa": 2.67}}}

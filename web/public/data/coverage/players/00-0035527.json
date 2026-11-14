@@ -1,1 +1,1 @@
-{"routes": {"SWING": {"targets": 1, "share": 100.0}}, "cov": {"MAN": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.43}, "COVER_1": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.43}}, "pass": {}}
+{"routes": {"SWING": {"targets": 1, "share": 100.0}}, "cov": {"COVER_1": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.43}, "MAN": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.43}}, "pass": {}}

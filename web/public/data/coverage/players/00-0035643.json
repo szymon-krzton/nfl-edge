@@ -1,1 +1,1 @@
-{"routes": {"IN/DIG": {"targets": 1, "share": 50.0}, "QUICK OUT": {"targets": 1, "share": 50.0}}, "cov": {"COVER_0": {"targets": 2, "rec": 2.0, "yds": 3.0, "td": 2.0, "epa": 0.86}, "MAN": {"targets": 2, "rec": 2.0, "yds": 3.0, "td": 2.0, "epa": 0.86}}, "pass": {}}
+{"routes": {"IN/DIG": {"targets": 1, "share": 50.0}, "QUICK OUT": {"targets": 1, "share": 50.0}}, "cov": {"MAN": {"targets": 2, "rec": 2.0, "yds": 3.0, "td": 2.0, "epa": 0.86}, "COVER_0": {"targets": 2, "rec": 2.0, "yds": 3.0, "td": 2.0, "epa": 0.86}}, "pass": {}}

@@ -1,1 +1,1 @@
-{"routes": {"CORNER": {"targets": 1, "share": 100.0}}, "cov": {"ZONE": {"targets": 1, "rec": 1.0, "yds": 2.0, "td": 1.0, "epa": 2.05}, "COVER_3": {"targets": 1, "rec": 1.0, "yds": 2.0, "td": 1.0, "epa": 2.05}}, "pass": {}}
+{"routes": {"CORNER": {"targets": 1, "share": 100.0}}, "cov": {"COVER_3": {"targets": 1, "rec": 1.0, "yds": 2.0, "td": 1.0, "epa": 2.05}, "ZONE": {"targets": 1, "rec": 1.0, "yds": 2.0, "td": 1.0, "epa": 2.05}}, "pass": {}}
