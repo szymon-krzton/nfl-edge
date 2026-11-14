@@ -25,13 +25,13 @@ df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
         .with_columns([pl.col(c).fill_null(0) for c in stats]))
 # daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
 _sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
-gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday"]),
-                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday"])])
+gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday", pl.lit(True).alias("home")]),
+                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday", pl.lit(False).alias("home")])])
             .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
 df = (df.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64))
         .join(gdates, on=["season", "week", "team"], how="left").rename({"gameday": "date"}))
 print("mecze bez daty:", df.filter(pl.col("date").is_null()).height)
-base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date"]
+base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date", "home"]
 
 players = (df.group_by("player_id")
              .agg(pl.col("player_display_name").last().alias("name"),

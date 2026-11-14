@@ -23,9 +23,9 @@ function Plain({head,rows}){
 }
 
 function Chart({data,line,empty}){
-  const W=720,H=270,L=34,R=8,T=22,B=44,n=data.length;
-  if(!n)return <div className="mu" style={{aspectRatio:"720 / 270",display:"grid",placeItems:"center",border:"1px dashed var(--ln)",borderRadius:8}}>{empty}</div>;
-  const base=Math.max(1,...data.map(d=>d.v),line||0),mx=base*1.15,iw=W-L-R,bw=Math.min(54,iw/n*.62);
+  const n=data.length,W=720,H=340,L=34,R=64,T=24,slot=(W-L-R)/Math.max(n,1),fs=Math.max(7,Math.min(11,slot/5.6)),fs1=Math.max(7,Math.min(11,slot/3.2)),stag=slot<fs*5.6+2,B=stag?58:44;
+  if(!n)return <div className="mu" style={{aspectRatio:"720 / 340",display:"grid",placeItems:"center",border:"1px dashed var(--ln)",borderRadius:8}}>{empty}</div>;
+  const base=Math.max(1,...data.map(d=>d.v),line||0),mx=base*1.15,iw=W-L-R,bw=Math.min(64,iw/n*.62);
   const y=v=>T+(H-T-B)*(1-v/mx),x=i=>L+iw/n*(i+.5);
   return <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Wykres wyników w kolejnych meczach">
     {[0,.5,1].map(f=>{const t=Math.round(base*f*10)/10;return <g key={f}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="var(--ln)"/>
@@ -33,10 +33,10 @@ function Chart({data,line,empty}){
     {data.map((d,i)=><g key={i}>
       <rect x={x(i)-bw/2} y={y(d.v)} width={bw} height={Math.max(1,H-B-y(d.v))} rx="3" fill={line==null||d.v>line?"var(--ac)":"#5b6b7f"}/>
       <text x={x(i)} y={y(d.v)-6} textAnchor="middle" fontSize="12" fontWeight="600" fill="var(--tx)">{d.v}</text>
-      <text x={x(i)} y={H-B+16} textAnchor="middle" fontSize="11" fill="var(--mu)">{d.l1}</text>
-      <text x={x(i)} y={H-B+30} textAnchor="middle" fontSize="10" fill="var(--mu)">{d.l2}</text></g>)}
+      <text x={x(i)} y={H-B+16} textAnchor="middle" fontSize={fs1} fill="var(--mu)">{d.l1}</text>
+      <text x={x(i)} y={H-B+30+(stag&&i%2?11:0)} textAnchor="middle" fontSize={fs} fill="var(--mu)">{d.l2}</text></g>)}
     {line!=null&&<g><line x1={L} x2={W-R} y1={y(line)} y2={y(line)} stroke="var(--warn)" strokeDasharray="5 4"/>
-      <text x={W-R} y={y(line)-4} textAnchor="end" fontSize="11" fill="var(--warn)">linia {line}</text></g>}
+      <text x={W-R+6} y={y(line)+4} textAnchor="start" fontSize="11" fill="var(--warn)">linia {line}</text></g>}
   </svg>;
 }
 
@@ -72,22 +72,31 @@ function ChartBlock({p,log,g,opp,odds,hist}){
   const [k,setK]=useState(tabs[0][0]),[rg,setRg]=useState("cur"),[line,setLine]=useState("");
   const o=odds?.players?.[p.player_id]?.[k],hs=hist?.[g.game_id]?.players?.[p.player_id]?.[k];
   useEffect(()=>{setLine(o&&o.line!=null?String(o.line):"")},[k,o?.line]);
-  const rows=useMemo(()=>rg==="prev"?log.filter(r=>r.season===g.season-1):rg==="cur"?log.filter(r=>r.season===g.season)
-    :rg==="h2h"?log.filter(r=>r.opponent_team===opp):rg==="l5"?log.slice(-5):log.slice(-10),[log,rg,g,opp]);
+  const [nC,setNC]=useState(20);
+  const rowsFor=key=>key==="prev"?log.filter(r=>r.season===g.season-1):key==="cur"?log.filter(r=>r.season===g.season)
+    :key==="h2h"?log.filter(r=>r.opponent_team===opp):key==="l5"?log.slice(-5):key==="cu"?log.slice(-nC):log.slice(-10);
+  const rows=rowsFor(rg);
   const multi=new Set(rows.map(r=>r.season)).size>1;
-  const data=rows.map(r=>({v:val(r,k),l1:r.opponent_team,l2:D(r.date,multi?1:0)||`T${r.week}`}));
+  const data=rows.map(r=>({v:val(r,k),l1:`${r.home==null?"":r.home?"vs ":"@ "}${r.opponent_team}`,l2:D(r.date,2)||`T${r.week}/${r.season}`}));
   const vs=data.map(d=>d.v),n=vs.length,s=[...vs].sort((a,b)=>a-b);
   const mean=n?vs.reduce((a,b)=>a+b,0)/n:0,med=n?(n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2):0;
   const ln=parseFloat(String(line).replace(",",".")),L=isFinite(ln)?ln:null,over=L==null?0:vs.filter(v=>v>L).length;
-  return <section className="card"><h2>Wyniki w meczach <small>{tabs.find(t=>t[0]===k)[1]}</small></h2>
+  return <section className="card"><h2>Wyniki w meczach <label className="mu" style={{fontSize:13,fontWeight:400,fontFamily:"Inter,sans-serif"}}>Linia <input inputMode="decimal" placeholder="np. 62.5" value={line} onChange={e=>setLine(e.target.value)}/></label></h2>
     <div className="chips">{tabs.map(([key,nm])=><button key={key} className="tab" aria-pressed={k===key} onClick={()=>setK(key)}>{nm}</button>)}</div>
     {o&&<OddsChip o={o} hs={hs}/>}
     <Chart data={data} line={L} empty={rg==="h2h"?"Brak bezpośredniego meczu":"Brak meczów w wybranym zakresie"}/>
-    <div className="chips">{RANGES.map(([key,nm])=><button key={key} className="chip" aria-pressed={rg===key} onClick={()=>setRg(key)}>{nm}</button>)}
-      <label className="mu" style={{marginLeft:"auto"}}>Linia <input inputMode="decimal" placeholder="np. 62.5" value={line} onChange={e=>setLine(e.target.value)}/></label></div>
-    <div className="stat"><div><span className="mu">Mecze</span><b>{n}</b></div><div><span className="mu">Średnia</span><b>{n?mean.toFixed(1):"–"}</b></div>
-      <div><span className="mu">Mediana</span><b>{n?med:"–"}</b></div><div><span className="mu">Max</span><b>{n?s[n-1]:"–"}</b></div><div><span className="mu">Min</span><b>{n?s[0]:"–"}</b></div>
-      {L!=null&&n>0&&<div><span className="mu">Over {L}</span><b>{over}/{n} ({Math.round(over/n*100)}%)</b></div>}</div>
+    <div className="chips" style={{justifyContent:"space-between"}}>
+      <span className="mu">{L!=null?`Kafelki: mecze ponad linią ${L} (Over)`:"Wpisz linię, aby zobaczyć trafność Over w każdym zakresie"}</span>
+      {rg==="cu"&&<label className="mu">Liczba meczów <input type="number" min="1" max="99" value={nC} onChange={e=>setNC(Math.max(1,Math.min(99,parseInt(e.target.value)||1)))}/></label>}</div>
+    <div className="tiles">{[["prev",`Sezon ${g.season-1}`],["cur",`Sezon ${g.season}`],["h2h","H2H"],["l5","L5"],["l10","L10"],["cu",null]].map(([key,label])=>{
+      const vs=rowsFor(key).map(r=>val(r,k)),n=vs.length,hit=L==null?null:vs.filter(v=>v>L).length,pct=hit==null||!n?null:hit/n*100;
+      const mix=pct==null?null:`color-mix(in srgb, ${pct>=50?"var(--ac)":"var(--bad)"} ${Math.round(10+Math.abs(pct-50)*.7)}%, var(--card2))`;
+      const main=!n?"–":L!=null?`${hit}/${n}`:(vs.reduce((s,v)=>s+v,0)/n).toFixed(1),sub=!n?"":L!=null?`${Math.round(pct)}%`:`śr. · ${n} gier`;
+      const pick=()=>setRg(key);
+      return <div key={key} role="button" tabIndex={0} aria-pressed={rg===key} className={`tile${n?"":" empty"}`} style={mix?{background:mix}:undefined}
+        onClick={pick} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();pick()}}}>
+        <small style={key==="cu"?{color:"#b794f4"}:undefined}>{key==="cu"?`L${nC} · własne`:label}</small>
+        <b>{main}</b><span className="mu">{sub||"\u00a0"}</span></div>})}</div>
     {rg==="h2h"&&<p className="mu" style={{fontSize:12}}>H2H: wszystkie mecze przeciwko {opp} w pobranych sezonach.</p>}
   </section>;
 }
@@ -178,16 +187,22 @@ export default function App(){
     Źródła danych: statystyki, terminarze i składy – nflverse; dane o rodzajach krycia (coverage) i ścieżkach – FTN Data via nflverse, na licencji{" "}
     <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer" style={{color:"var(--ac)"}}>CC BY-SA 4.0</a>; depth charty i statusy kontuzji – ESPN.
     Kursy: Superbet (PL) via OddsPapi; mogą różnić się od aktualnych na stronie bukmachera. Aplikacja ma charakter informacyjny i nie gwarantuje wyników zakładów. Hazard wiąże się z ryzykiem, 18+.</footer>;
-  if(p&&g)return <main>
+  if(p&&g)return <main style={{maxWidth:"none"}}>
     <button className="back" onClick={()=>setP(null)}>← Wróć do meczu {g.away_team} @ {g.home_team}</button>
     <h1>{p.name}<Badge s={p.status} inj={p.injury}/></h1>
     <div className="mu">{p.pos} · {p.team} vs {opp} · {D(g.gameday,2)}</div>
     <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game}/>
-    <ChartBlock key={p.player_id} p={p} log={log} g={g} opp={opp} odds={odds} hist={hist}/>
-    <CoverageBlock p={p} opp={opp} cov={cov} pc={pc}/>
-    <OthersBlock p={p} opp={opp} def={def} rank={rank}/>
-    <RoutesBlock p={p} opp={opp} cov={cov} pc={pc}/>
-    <Usage usage={usage} teams={[p.team]} depth={depth} pick={pick}/>
+    <div className="cols">
+      <div className="col">
+        <div style={{order:1}}><ChartBlock key={p.player_id} p={p} log={log} g={g} opp={opp} odds={odds} hist={hist}/></div>
+        <div style={{order:3}}><OthersBlock p={p} opp={opp} def={def} rank={rank}/></div>
+      </div>
+      <div className="col">
+        <div style={{order:2}}><CoverageBlock p={p} opp={opp} cov={cov} pc={pc}/></div>
+        <div style={{order:4}}><RoutesBlock p={p} opp={opp} cov={cov} pc={pc}/></div>
+        <div style={{order:5}}><Usage usage={usage} teams={[p.team]} depth={depth} pick={pick}/></div>
+      </div>
+    </div>
     {footer}</main>;
   return <main><h1>NFL Edge</h1><p className="mu">Wybierz mecz, a potem zawodnika z depth chartu.</p>
     {!games.length&&<p className="mu">Brak nadchodzących meczów w terminarzu.</p>}
