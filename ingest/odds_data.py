@@ -1,8 +1,9 @@
-"""Kursy i linie Superbet (PL) z OddsPapi -> web/public/data/odds.json.
+"""Kursy i pełna historia linii Superbet (PL) z OddsPapi (historical-odds).
 
-Uruchamiaj PO build_data.py (korzysta z players.json i schedule.json).
-Klucz: zmienna środowiskowa ODDSPAPI_KEY (lokalnie) albo sekret ODDSPAPI_KEY (GitHub Actions).
-Darmowy limit to ok. 250 zapytań miesięcznie; jedno uruchomienie zużywa ok. 2 + liczba meczów kolejki.
+Zapisuje: web/public/data/odds.json (bieżące linie), web/public/data/odds_history.json (ruch linii od otwarcia rynku)
+oraz ingest/odds_players.json (mapa identyfikatorów zawodników OddsPapi -> nazwiska; commitujemy ją).
+Uruchamiaj PO build_data.py. Klucz: zmienna ODDSPAPI_KEY. Lokalnie ODDS_CACHE=1 oszczędza limit zapytań.
+Zużycie: ok. 2 + liczba meczów kolejki zapytań; dodatkowo po jednym zapytaniu o kursy dla meczów z nieznanymi zawodnikami.
 """
 import datetime as dt
 import hashlib
@@ -19,10 +20,12 @@ KEY = os.environ.get("ODDSPAPI_KEY")
 if not KEY:
     sys.exit("Ustaw zmienną środowiskową ODDSPAPI_KEY.")
 BASE = "https://api.oddspapi.io/v4"
-SLUGS = ("superbet.pl", "superbet")  # pierwszy dostępny i niewstrzymany
-MAX_CALLS = int(os.environ.get("ODDS_MAX_CALLS", "25"))
+BOOK = "superbet.pl"
+MAX_CALLS = int(os.environ.get("ODDS_MAX_CALLS", "40"))
 DATA = Path(__file__).resolve().parents[1] / "web" / "public" / "data"
-PROPS = {  # nazwa rynku w OddsPapi -> klucz statystyki w aplikacji
+MAPFILE = Path(__file__).resolve().parent / "odds_players.json"
+CACHE = Path(__file__).resolve().parent / ".odds_cache"
+PROPS = {
     "Over Under Player Receiving Yards (incl. overtime)": "receiving_yards",
     "Over Under Player Receptions (incl. overtime)": "receptions",
     "Over Under Player Rush Yards (incl. overtime)": "rushing_yards",
@@ -41,7 +44,6 @@ NICK = {"ARI": "cardinals", "ATL": "falcons", "BAL": "ravens", "BUF": "bills", "
         "LA": "rams", "MIA": "dolphins", "MIN": "vikings", "NE": "patriots", "NO": "saints", "NYG": "giants",
         "NYJ": "jets", "PHI": "eagles", "PIT": "steelers", "SF": "49ers", "SEA": "seahawks", "TB": "buccaneers",
         "TEN": "titans", "WAS": "commanders"}
-CACHE = Path(__file__).resolve().parent / ".odds_cache"  # włącz: ODDS_CACHE=1 (pliki ważne 6 h, nie commituj)
 calls = 0
 
 
@@ -82,30 +84,6 @@ def flip(name):  # "Maye, Drake" -> "Drake Maye"
     return f"{b.strip()} {a.strip()}".strip() if b else name
 
 
-def best_line(lines):  # linia o kursach najbliższych sobie (główna)
-    c = [(abs(v["Over"] - v["Under"]), h, v) for h, v in lines.items() if "Over" in v and "Under" in v]
-    if not c:
-        return None
-    _, h, v = min(c, key=lambda x: x[0])
-    return {"line": h, "over": v["Over"], "under": v["Under"]}
-
-
-players = json.loads((DATA / "players.json").read_text(encoding="utf-8"))
-games = json.loads((DATA / "schedule.json").read_text(encoding="utf-8"))
-if not games:
-    sys.exit("Brak meczów w schedule.json - uruchom najpierw build_data.py.")
-by_team = {}
-for p in players:
-    by_team.setdefault(p["team"], {})[norm(p["name"])] = p["player_id"]
-
-dfile = DATA / "depth.json"
-if dfile.exists():
-    for team, d in json.loads(dfile.read_text(encoding="utf-8")).items():
-        for lst in d.values():
-            for x in lst:
-                by_team.setdefault(team, {}).setdefault(norm(x["name"]), x["player_id"])
-
-
 def find(ids, name):
     n = norm(name)
     if not n:
@@ -128,85 +106,165 @@ def team_of(name):
     return next((a for a, k in NICK.items() if k in n), None)
 
 
+def timeline(lines, a, b):
+    """lines: {linia: {strona: [wpisy]}} -> ([[czas, linia, cena_a, cena_b], ...], czy_rynek_aktywny_teraz).
+    W każdej chwili wybieramy aktywną linię o najbardziej wyrównanych kursach (główną)."""
+    ev = {(h, s): sorted(v.get(s, []), key=lambda e: e["createdAt"]) for h, v in lines.items() for s in (a, b)}
+    times = sorted({e["createdAt"] for lst in ev.values() for e in lst})
+    idx, cur, rows, live = {k: 0 for k in ev}, {}, [], False
+    for t in times:
+        for k, lst in ev.items():
+            while idx[k] < len(lst) and lst[idx[k]]["createdAt"] <= t:
+                cur[k] = lst[idx[k]]
+                idx[k] += 1
+        cands = [(abs(cur[(h, a)]["price"] - cur[(h, b)]["price"]), h) for h in lines
+                 if (h, a) in cur and (h, b) in cur and cur[(h, a)]["active"] and cur[(h, b)]["active"]]
+        live = bool(cands)
+        if cands:
+            _, h = min(cands, key=lambda c: c[0])
+            row = [t, h, cur[(h, a)]["price"], cur[(h, b)]["price"]]
+            if not rows or rows[-1][1:] != row[1:]:
+                rows.append(row)
+    return rows, live
+
+
+def timeline_one(entries):
+    rows = []
+    for e in sorted(entries, key=lambda e: e["createdAt"]):
+        if e["active"] and (not rows or rows[-1][1] != e["price"]):
+            rows.append([e["createdAt"], e["price"]])
+    last = max(entries, key=lambda e: e["createdAt"]) if entries else None
+    return rows, bool(last and last["active"])
+
+
+players = json.loads((DATA / "players.json").read_text(encoding="utf-8"))
+games = json.loads((DATA / "schedule.json").read_text(encoding="utf-8"))
+if not games:
+    sys.exit("Brak meczów w schedule.json - uruchom najpierw build_data.py.")
+by_team = {}
+for p in players:
+    by_team.setdefault(p["team"], {})[norm(p["name"])] = p["player_id"]
+dfile = DATA / "depth.json"
+if dfile.exists():
+    for team, d in json.loads(dfile.read_text(encoding="utf-8")).items():
+        for lst in d.values():
+            for x in lst:
+                by_team.setdefault(team, {}).setdefault(norm(x["name"]), x["player_id"])
+pmap = json.loads(MAPFILE.read_text(encoding="utf-8")) if MAPFILE.exists() else {}  # id OddsPapi -> "Imię Nazwisko"
+
 today = dt.date.today()
-fixtures = call("fixtures", sportId=14, tournamentId=31,
-                **{"from": str(today), "to": str(today + dt.timedelta(days=8))})
+fixtures = call("fixtures", sportId=14, tournamentId=31, **{"from": str(today), "to": str(today + dt.timedelta(days=8))})
 now = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M")
 upcoming = sorted((f for f in fixtures if f["startTime"] > now), key=lambda f: f["startTime"])
-print("mecze do pobrania:", len(upcoming))
+print("mecze do pobrania:", len(upcoming), "| znanych zawodników w mapie:", len(pmap))
 catalog = call("markets", sportId=14)
 mname = {m["marketId"]: m["marketName"] for m in catalog}
 hand = {m["marketId"]: m.get("handicap") for m in catalog}
 oname = {(m["marketId"], o["outcomeId"]): o["outcomeName"] for m in catalog for o in m.get("outcomes", [])}
 
-out = {"updated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="minutes"), "bookmaker": None, "players": {}, "games": {}}
+
+def collect(book):
+    props, gm, unknown = {}, {}, set()
+    for mid, m in book["markets"].items():
+        name, h = mname.get(int(mid), ""), hand.get(int(mid))
+        for oid, o in m["outcomes"].items():
+            side = oname.get((int(mid), int(oid)), "")
+            for pid, ents in o["players"].items():
+                if pid == "0":
+                    if name in GAME:
+                        gm.setdefault(GAME[name], {}).setdefault(h, {})[side] = ents
+                elif name in PROPS:
+                    if pid in pmap:
+                        props.setdefault((pmap[pid], PROPS[name]), {}).setdefault(h, {})[side] = ents
+                    else:
+                        unknown.add(pid)
+    return props, gm, unknown
+
+
+HFILE = DATA / "odds_history.json"
+hist = json.loads(HFILE.read_text(encoding="utf-8")) if HFILE.exists() else {}
+out = {"updated": dt.datetime.now(dt.timezone.utc).isoformat(timespec="minutes"), "bookmaker": BOOK, "players": {}, "games": {}}
 unmatched = []
 for fx in upcoming:
     try:
-        board = call("odds", fixtureId=fx["fixtureId"]).get("bookmakerOdds") or {}
+        resp = call("historical-odds", fixtureId=fx["fixtureId"], bookmakers=BOOK)
+        book = (resp.get("bookmakers") or {}).get(BOOK)
+        if not book:
+            print("brak Superbet na meczu", fx["fixtureId"], fx["startTime"])
+            continue
+        props, gm, unknown = collect(book)
+        if unknown:  # nieznane id zawodników: jedno zapytanie o kursy daje ich nazwiska
+            board = (call("odds", fixtureId=fx["fixtureId"]).get("bookmakerOdds") or {}).get(BOOK) or {}
+            for m in board.get("markets", {}).values():
+                for o in m["outcomes"].values():
+                    for pid, price in o["players"].items():
+                        if pid != "0" and price.get("playerName"):
+                            pmap[pid] = flip(price["playerName"])
+            props, gm, unknown = collect(book)
     except Exception as e:
         print("przerywam pobieranie:", e)
         break
-    slug = next((s for s in SLUGS if s in board and not board[s].get("suspended")), None)
-    if not slug:
-        print("brak Superbet na meczu", fx["fixtureId"], fx["startTime"])
-        continue
-    props, game = {}, {}
-    for mid, market in board[slug]["markets"].items():
-        name, h = mname.get(int(mid), ""), hand.get(int(mid))
-        for oid, outcome in market["outcomes"].items():
-            side = oname.get((int(mid), int(oid)), "")
-            for pid, price in outcome["players"].items():
-                if not price.get("active") or price.get("price") is None:
-                    continue
-                if pid == "0":
-                    if name in GAME:
-                        game.setdefault(GAME[name], {}).setdefault(h, {})[side] = price["price"]
-                elif name in PROPS:
-                    props.setdefault((flip(price.get("playerName", "")), PROPS[name]), {}).setdefault(h, {})[side] = price["price"]
     names = {norm(n) for n, _ in props}
     scored = [(len(names & (by_team.get(g["away_team"], {}).keys() | by_team.get(g["home_team"], {}).keys())), g) for g in games]
     overlap, g = max(scored, key=lambda x: x[0])
     if overlap < 3:
         print("nie dopasowano meczu do terminarza:", fx["fixtureId"], fx["startTime"], "(wspólnych nazwisk:", overlap, ")")
         continue
+    gid = g["game_id"]
     ids = {**by_team.get(g["away_team"], {}), **by_team.get(g["home_team"], {})}
-    n_ok = 0
+    hp, n_ok = {}, 0
     for (pname, stat), lines in props.items():
         pid = find(ids, pname)
         if not pid:
             unmatched.append(pname)
             continue
         if stat == "td":
-            yes = next((v.get("Yes") or v.get("1+") for v in lines.values() if v.get("Yes") or v.get("1+")), None)
-            if yes:
-                out["players"].setdefault(pid, {})["td"] = {"yes": yes}
-                n_ok += 1
+            ents = next((v.get("Yes") or v.get("1+") for v in lines.values() if v.get("Yes") or v.get("1+")), None)
+            rows, live = timeline_one(ents) if ents else ([], False)
+            if rows:
+                hp.setdefault(pid, {})["td"] = rows
+                if live:
+                    out["players"].setdefault(pid, {})["td"] = {"yes": rows[-1][1]}
+                    n_ok += 1
         else:
-            b = best_line(lines)
-            if b:
-                out["players"].setdefault(pid, {})[stat] = b
-                n_ok += 1
-    gl = {"fixtureId": fx["fixtureId"], "startTime": fx["startTime"], "total": best_line(game.get("total", {}))}
+            rows, live = timeline(lines, "Over", "Under")
+            if rows:
+                hp.setdefault(pid, {})[stat] = rows
+                if live:
+                    out["players"].setdefault(pid, {})[stat] = {"line": rows[-1][1], "over": rows[-1][2], "under": rows[-1][3]}
+                    n_ok += 1
+    gl, gh = {"fixtureId": fx["fixtureId"], "startTime": fx["startTime"]}, {}
+    tot, live = timeline(gm.get("total", {}), "Over", "Under")
+    if tot:
+        gh["total"] = tot
+        if live:
+            gl["total"] = {"line": tot[-1][1], "over": tot[-1][2], "under": tot[-1][3]}
     p1, p2 = team_of(fx.get("participant1Name")), team_of(fx.get("participant2Name"))
     if {p1, p2} == {g["away_team"], g["home_team"]}:
-        c = [(abs(v["1"] - v["2"]), h, v) for h, v in game.get("handicap", {}).items() if "1" in v and "2" in v and h is not None]
-        if c:
-            _, h, v = min(c, key=lambda x: x[0])
-            gl["spread"] = {p1: {"line": h, "price": v["1"]}, p2: {"line": -h, "price": v["2"]}}
-        w = next((v for v in game.get("winner", {}).values() if "1" in v and "2" in v), None)
-        if w:
-            gl["moneyline"] = {p1: w["1"], p2: w["2"]}
+        hc, live = timeline(gm.get("handicap", {}), "1", "2")
+        if hc:
+            gh["spread"] = {p1: [[t, h, a] for t, h, a, b in hc], p2: [[t, -h, b] for t, h, a, b in hc]}
+            if live:
+                gl["spread"] = {p1: {"line": hc[-1][1], "price": hc[-1][2]}, p2: {"line": -hc[-1][1], "price": hc[-1][3]}}
+        ml, live = timeline(gm.get("winner", {}), "1", "2")
+        if ml:
+            gh["moneyline"] = {p1: [[t, a] for t, h, a, b in ml], p2: [[t, b] for t, h, a, b in ml]}
+            if live:
+                gl["moneyline"] = {p1: ml[-1][2], p2: ml[-1][3]}
     else:
         print("nie rozpoznano drużyn z pól fixture - pomijam spread i moneyline. Klucze:", list(fx))
-    out["games"][g["game_id"]] = gl
-    out["bookmaker"] = slug
-    print(f'{g["away_team"]} @ {g["home_team"]}: {slug}, dopasowane propsy: {n_ok}, total: {gl["total"]}')
+    out["games"][gid] = gl
+    hist[gid] = {"startTime": fx["startTime"], "players": hp, "game": gh}
+    print(f'{g["away_team"]} @ {g["home_team"]}: propsy z aktywną linią: {n_ok}, zmian linii total: {len(gh.get("total", []))}')
 
+MAPFILE.write_text(json.dumps(pmap, ensure_ascii=False, sort_keys=True), encoding="utf-8")
 if not out["games"]:
     sys.exit("Nie pobrano żadnych kursów - zostawiam poprzedni odds.json.")
 (DATA / "odds.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
-print(f"zapisano odds.json: {len(out['games'])} meczów, {len(out['players'])} zawodników; zapytań użytych: {calls}")
+cutoff = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=21)).strftime("%Y-%m-%dT%H:%M")
+hist = {k: v for k, v in hist.items() if v["startTime"] >= cutoff}  # starsze mecze usuwamy
+HFILE.write_text(json.dumps(hist, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+print(f"zapisano: {len(out['games'])} meczów, {len(out['players'])} zawodników, historia: {len(hist)} meczów; zapytań użytych: {calls}")
 if unmatched:
     print("niedopasowani zawodnicy (", len(unmatched), "):", sorted(set(unmatched))[:25])
-print("próbka:", json.dumps(next(iter(out["games"].values())), ensure_ascii=False)[:500])
+print("próbka:", json.dumps(next(iter(out["games"].values())), ensure_ascii=False)[:400])
