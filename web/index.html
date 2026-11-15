@@ -26,7 +26,7 @@ th{color:var(--mu);font-weight:500;font-size:11px;text-transform:uppercase;lette
 .badge{display:inline-block;padding:0 6px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;background:#3a1f22;color:var(--bad)}.badge.w{background:#3a2b10;color:var(--warn)}
 .stat{display:flex;gap:22px;flex-wrap:wrap;margin-top:10px}.stat b{display:block;font:700 24px "Barlow Condensed",sans-serif}
 .bar{display:inline-block;height:6px;background:var(--ln);border-radius:3px;width:80px}.bar i{display:block;height:100%;background:var(--ac);border-radius:3px}
-input{background:var(--card2);border:1px solid var(--ln);border-radius:8px;color:var(--tx);padding:6px 9px;font:inherit;width:90px}
+input,select{background:var(--card2);border:1px solid var(--ln);border-radius:8px;color:var(--tx);padding:6px 9px;font:inherit;width:90px}
 .link{border:0;background:none;padding:0;text-decoration:underline;text-decoration-color:var(--ln);text-underline-offset:3px;text-align:left}.link:hover{color:var(--ac)}
 .cols{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:start;margin-top:14px}
 .col{display:flex;flex-direction:column;gap:14px;min-width:0}.cols .card{margin-top:0}
@@ -38,5 +38,9 @@ input{background:var(--card2);border:1px solid var(--ln);border-radius:8px;color
 .tile:hover{border-color:var(--mu)}.tile[aria-pressed=true]{border-color:var(--tx)}
 .tile.empty{border:1px dashed var(--ln);background:none;color:var(--mu)}
 .nin{width:42px;padding:0 2px;margin:0 2px;font-size:12px;text-align:center;background:var(--card);border-radius:4px}
+.modal-back{position:fixed;inset:0;background:rgba(5,8,12,.72);display:grid;place-items:center;z-index:50;padding:16px}
+.modal{background:var(--card);border:1px solid var(--ln);border-radius:12px;max-width:1000px;width:100%;max-height:90vh;overflow:auto;padding:18px}
+.barhit{cursor:pointer;outline:none}.barhit:hover .hit,.barhit:focus-visible .hit{fill:rgba(255,255,255,.07)}
+select{width:auto;max-width:240px}.chip:disabled{opacity:.45;cursor:default}
 :focus-visible{outline:2px solid var(--ac);outline-offset:2px}
 </style></head><body><div id="root"></div><script type="module" src="/src/main.jsx"></script></body></html>

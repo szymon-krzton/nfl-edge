@@ -1,1 +1,1 @@
-{"routes": {"QUICK OUT": {"targets": 1, "share": 100.0}}, "cov": {"ZONE": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.05}, "COVER_4": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.05}}, "pass": {}}
+{"routes": {"QUICK OUT": {"targets": 1, "share": 100.0}}, "cov": {"COVER_4": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.05}, "ZONE": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.05}}, "pass": {}}

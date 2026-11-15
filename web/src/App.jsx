@@ -22,7 +22,7 @@ function Plain({head,rows}){
     {rows.map((r,i)=><tr key={i}>{r.map((c,j)=><td key={j}>{c}</td>)}</tr>)}</tbody></table></div>;
 }
 
-function Chart({data,line,empty}){
+function Chart({data,line,empty,onPick}){
   const n=data.length,W=720,H=340,L=34,R=64,T=24,slot=(W-L-R)/Math.max(n,1),fs=Math.max(7,Math.min(11,slot/5.6)),fs1=Math.max(7,Math.min(11,slot/3.2)),stag=slot<fs*5.6+2,B=stag?58:44;
   if(!n)return <div className="mu" style={{aspectRatio:"720 / 340",display:"grid",placeItems:"center",border:"1px dashed var(--ln)",borderRadius:8}}>{empty}</div>;
   const base=Math.max(1,...data.map(d=>d.v),line||0),mx=base*1.15,iw=W-L-R,bw=Math.min(64,iw/n*.62);
@@ -30,7 +30,10 @@ function Chart({data,line,empty}){
   return <svg viewBox={`0 0 ${W} ${H}`} width="100%" role="img" aria-label="Wykres wyników w kolejnych meczach">
     {[0,.5,1].map(f=>{const t=Math.round(base*f*10)/10;return <g key={f}><line x1={L} x2={W-R} y1={y(t)} y2={y(t)} stroke="var(--ln)"/>
       <text x={L-6} y={y(t)+4} textAnchor="end" fontSize="11" fill="var(--mu)">{t}</text></g>})}
-    {data.map((d,i)=><g key={i}>
+    {data.map((d,i)=><g key={i} className={d.gid?"barhit":undefined} role={d.gid?"button":undefined} tabIndex={d.gid?0:undefined}
+      aria-label={d.gid?`Box score: ${d.l1} ${d.l2}`:undefined} onClick={()=>d.gid&&onPick&&onPick(d)}
+      onKeyDown={e=>{if(d.gid&&onPick&&(e.key==="Enter"||e.key===" ")){e.preventDefault();onPick(d)}}}>
+      <rect className="hit" x={x(i)-slot/2} y={T} width={slot} height={H-T-B+36} fill="transparent"/>
       <rect x={x(i)-bw/2} y={y(d.v)} width={bw} height={Math.max(1,H-B-y(d.v))} rx="3" fill={line==null||d.v>line?"var(--ac)":"#5b6b7f"}/>
       <text x={x(i)} y={y(d.v)-6} textAnchor="middle" fontSize="12" fontWeight="600" fill="var(--tx)">{d.v}</text>
       <text x={x(i)} y={H-B+16} textAnchor="middle" fontSize={fs1} fill="var(--mu)">{d.l1}</text>
@@ -67,24 +70,70 @@ function OddsChip({o,hs}){
   return <><p className="mu" style={{margin:"8px 0"}}>Superbet: linia {b(o.line)} · Over {b(o.over)} · Under {b(o.under)} · szansa Over bez marży {b(`${(x/(x+y)*100).toFixed(1)}%`)}</p><Moves hs={hs}/></>;
 }
 
-function ChartBlock({p,log,g,opp,odds,hist}){
+function RosterFilter({mates,flt,setFlt}){
+  const [id,setId]=useState("");
+  const add=mode=>{const m=mates.find(x=>x.id===id);if(m)setFlt([...flt.filter(f=>f.id!==id),{...m,mode}])};
+  return <div className="chips" style={{marginTop:6}}>
+    <span className="mu">Skład:</span>
+    <select value={id} onChange={e=>setId(e.target.value)} aria-label="Zawodnik z tej samej drużyny">
+      <option value="">wybierz zawodnika…</option>{mates.map(m=><option key={m.id} value={m.id}>{m.name} ({m.pos})</option>)}</select>
+    <button className="chip" disabled={!id} onClick={()=>add("with")}>Z nim</button>
+    <button className="chip" disabled={!id} onClick={()=>add("without")}>Bez niego</button>
+    {flt.map(f=><button key={f.id} className="chip" aria-pressed="true" title="Usuń filtr" onClick={()=>setFlt(flt.filter(x=>x.id!==f.id))}>{f.mode==="with"?"z":"bez"} {f.name} ×</button>)}</div>;
+}
+
+function BoxScore({gid,pid,onClose}){
+  const [b,setB]=useState(undefined);
+  useEffect(()=>{get(`/data/box/${gid}.json`).then(setB).catch(()=>setB(null))},[gid]);
+  useEffect(()=>{const f=e=>{if(e.key==="Escape")onClose()};window.addEventListener("keydown",f);return()=>window.removeEventListener("keydown",f)},[onClose]);
+  const n=(x,c)=>x[c]||0,hi=x=>x.id===pid?<b style={{color:"var(--ac)"}}>{x.name}</b>:x.name;
+  const SECS=[
+    ["Podania",["Zawodnik","C/ATT","Jardy","TD","INT"],x=>n(x,"attempts")>0,"passing_yards",x=>[`${n(x,"completions")}/${n(x,"attempts")}`,n(x,"passing_yards"),n(x,"passing_tds"),n(x,"passing_interceptions")]],
+    ["Biegi",["Zawodnik","Carries","Jardy","TD"],x=>n(x,"carries")>0,"rushing_yards",x=>[n(x,"carries"),n(x,"rushing_yards"),n(x,"rushing_tds")]],
+    ["Odbiory",["Zawodnik","Targety","Przyjęcia","Jardy","TD"],x=>n(x,"targets")>0||n(x,"receptions")>0,"receiving_yards",x=>[n(x,"targets"),n(x,"receptions"),n(x,"receiving_yards"),n(x,"receiving_tds")]]];
+  const body=()=>{
+    const ts=[b.away.team,b.home.team],score=t=>(t===b.away.team?b.away.score:b.home.score)??"–";
+    const rows=(t,[,,f,key,cells])=>b.players.filter(x=>x.team===t&&f(x)).sort((a,z)=>n(z,key)-n(a,key)).map(x=>[hi(x),...cells(x)]);
+    return <>
+      <div className="grid">{ts.map(t=><h2 key={t} style={{marginTop:6}}>{t} <span className="mu" style={{fontSize:16}}>{score(t)}</span></h2>)}</div>
+      {SECS.map(s=>{const R=ts.map(t=>rows(t,s));
+        return R.some(r=>r.length>0)&&<div className="grid" key={s[0]}>{ts.map((t,k)=><div key={t}>{R[k].length>0&&<><h3>{s[0]}</h3><Plain head={s[1]} rows={R[k]}/></>}</div>)}</div>})}
+    </>};
+  return <div className="modal-back" onClick={onClose}><div className="modal" role="dialog" aria-modal="true" aria-label="Box score" onClick={e=>e.stopPropagation()}>
+    <button className="back" onClick={onClose} aria-label="Zamknij" style={{float:"right",fontSize:26,lineHeight:1,margin:0}}>×</button>
+    {b===undefined?<p className="mu">Ładowanie…</p>:b===null?<p className="mu">Brak box score’u dla tego meczu. Uruchom ponownie skrypt danych.</p>:<>
+      <h1 style={{fontSize:28}}>{b.away.team} @ {b.home.team}</h1>
+      <div className="mu">{D(b.date,2)} · tydzień {b.week} · wynik {b.away.score??"–"} – {b.home.score??"–"}</div>
+      {body()}
+      <p className="mu" style={{fontSize:12}}>Uproszczony box score: tylko QB, RB, WR i TE. Zawodnik z otwartej karty jest wyróżniony.</p></>}
+  </div></div>;
+}
+
+function ChartBlock({p,log,g,opp,odds,hist,mates}){
   const tabs=TABS[p.pos]||TABS.WR;
   const [k,setK]=useState(tabs[0][0]),[rg,setRg]=useState("cur"),[line,setLine]=useState("");
   const o=odds?.players?.[p.player_id]?.[k],hs=hist?.[g.game_id]?.players?.[p.player_id]?.[k];
   useEffect(()=>{setLine(o&&o.line!=null?String(o.line):"")},[k,o?.line]);
-  const [nC,setNC]=useState(20);
-  const rowsFor=key=>key==="prev"?log.filter(r=>r.season===g.season-1):key==="cur"?log.filter(r=>r.season===g.season)
-    :key==="h2h"?log.filter(r=>r.opponent_team===opp):key==="l5"?log.slice(-5):key==="cu"?log.slice(-nC):log.slice(-10);
+  const [nC,setNC]=useState(20),[box,setBox]=useState(null),[flt,setFlt]=useState([]),[tl,setTl]=useState({});
+  useEffect(()=>{flt.forEach(f=>{if(tl[f.id]===undefined){setTl(t=>({...t,[f.id]:null}));
+    get(`/data/logs/${f.id}.json`).then(r=>setTl(t=>({...t,[f.id]:r}))).catch(()=>setTl(t=>({...t,[f.id]:[]})))}})},[flt]);
+  // obecność kolegi = ma wiersz ze statystykami w tym meczu; mecze z sezonów, w których nie było go w drużynie, pomijamy
+  const okRow=r=>flt.every(f=>{const t=tl[f.id];if(!t)return true;const sr=t.filter(x=>x.season===r.season&&x.team===r.team);
+    if(!sr.length)return false;const here=sr.some(x=>x.week===r.week);return f.mode==="with"?here:!here});
+  const flog=flt.length?log.filter(okRow):log;
+  const rowsFor=key=>key==="prev"?flog.filter(r=>r.season===g.season-1):key==="cur"?flog.filter(r=>r.season===g.season)
+    :key==="h2h"?flog.filter(r=>r.opponent_team===opp):key==="l5"?flog.slice(-5):key==="cu"?flog.slice(-nC):flog.slice(-10);
   const rows=rowsFor(rg);
   const multi=new Set(rows.map(r=>r.season)).size>1;
-  const data=rows.map(r=>({v:val(r,k),l1:`${r.home==null?"":r.home?"vs ":"@ "}${r.opponent_team}`,l2:D(r.date,2)||`T${r.week}/${r.season}`}));
+  const data=rows.map(r=>({v:val(r,k),l1:`${r.home==null?"":r.home?"vs ":"@ "}${r.opponent_team}`,l2:D(r.date,2)||`T${r.week}/${r.season}`,gid:r.gid}));
   const vs=data.map(d=>d.v),n=vs.length,s=[...vs].sort((a,b)=>a-b);
   const mean=n?vs.reduce((a,b)=>a+b,0)/n:0,med=n?(n%2?s[(n-1)/2]:(s[n/2-1]+s[n/2])/2):0;
   const ln=parseFloat(String(line).replace(",",".")),L=isFinite(ln)?ln:null,over=L==null?0:vs.filter(v=>v>L).length;
   return <section className="card"><h2>Wyniki w meczach <label className="mu" style={{fontSize:13,fontWeight:400,fontFamily:"Inter,sans-serif"}}>Linia <input inputMode="decimal" placeholder="np. 62.5" value={line} onChange={e=>setLine(e.target.value)}/></label></h2>
     <div className="chips">{tabs.map(([key,nm])=><button key={key} className="tab" aria-pressed={k===key} onClick={()=>setK(key)}>{nm}</button>)}</div>
+    <RosterFilter mates={mates||[]} flt={flt} setFlt={setFlt}/>
     {o&&<OddsChip o={o} hs={hs}/>}
-    <Chart data={data} line={L} empty={rg==="h2h"?"Brak bezpośredniego meczu":"Brak meczów w wybranym zakresie"}/>
+    <Chart data={data} line={L} onPick={d=>setBox(d.gid)} empty={rg==="h2h"?"Brak bezpośredniego meczu":"Brak meczów w wybranym zakresie"}/>
     <div className="chips" style={{justifyContent:"space-between"}}>
       <span className="mu">{L!=null?`Kafelki: mecze ponad linią ${L} (Over)`:"Wpisz linię, aby zobaczyć trafność Over w każdym zakresie"}</span>
       {rg==="cu"&&<label className="mu">Liczba meczów <input type="number" min="1" max="99" value={nC} onChange={e=>setNC(Math.max(1,Math.min(99,parseInt(e.target.value)||1)))}/></label>}</div>
@@ -97,7 +146,9 @@ function ChartBlock({p,log,g,opp,odds,hist}){
         onClick={pick} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();pick()}}}>
         <small style={key==="cu"?{color:"#b794f4"}:undefined}>{key==="cu"?`L${nC} · własne`:label}</small>
         <b>{main}</b><span className="mu">{sub||"\u00a0"}</span></div>})}</div>
-    {rg==="h2h"&&<p className="mu" style={{fontSize:12}}>H2H: wszystkie mecze przeciwko {opp} w pobranych sezonach.</p>}
+    <p className="mu" style={{fontSize:12,margin:"4px 0 0"}}>Kliknij słupek, aby zobaczyć box score meczu.{rg==="h2h"?` H2H: wszystkie mecze przeciwko ${opp} w pobranych sezonach.`:""}</p>
+    {flt.length>0&&<p className="mu" style={{fontSize:12,margin:"4px 0 0"}}>Filtr składu: {flog.length} z {log.length} meczów spełnia warunki. Obecność = zawodnik zapisał jakąkolwiek statystykę w meczu; mecze z sezonów, w których nie grał w tej drużynie, są pominięte.</p>}
+    {box&&<BoxScore gid={box} pid={p.player_id} onClose={()=>setBox(null)}/>}
   </section>;
 }
 
@@ -165,6 +216,14 @@ function Usage({usage,teams,depth,pick}){
     <p className="mu" style={{fontSize:12}}>Okno L liczone w ostatnich meczach drużyny; „na mecz" to średnia na mecz drużyny w oknie.</p></section>;
 }
 
+function matesOf(p,usage,depth){
+  const m=new Map();
+  (usage?.[p.team]?.players||[]).forEach(x=>m.set(x.player_id,{id:x.player_id,name:x.name,pos:x.pos}));
+  POS.forEach(pos=>(depth[p.team]?.[pos]||[]).forEach(x=>m.set(x.player_id,{id:x.player_id,name:x.name,pos})));
+  m.delete(p.player_id);
+  return [...m.values()].filter(x=>!String(x.id).startsWith("espn_")).sort((a,b)=>POS.indexOf(a.pos)-POS.indexOf(b.pos)||a.name.localeCompare(b.name));
+}
+
 export default function App(){
   const [games,setGames]=useState(null),[depth,setDepth]=useState({}),[g,setG]=useState(null),[p,setP]=useState(null),[log,setLog]=useState([]),
     [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null);
@@ -194,7 +253,7 @@ export default function App(){
     <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game}/>
     <div className="cols">
       <div className="col">
-        <div style={{order:1}}><ChartBlock key={p.player_id} p={p} log={log} g={g} opp={opp} odds={odds} hist={hist}/></div>
+        <div style={{order:1}}><ChartBlock key={p.player_id} p={p} log={log} g={g} opp={opp} odds={odds} hist={hist} mates={matesOf(p,usage,depth)}/></div>
         <div style={{order:3}}><OthersBlock p={p} opp={opp} def={def} rank={rank}/></div>
       </div>
       <div className="col">

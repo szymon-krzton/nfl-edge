@@ -25,13 +25,13 @@ df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
         .with_columns([pl.col(c).fill_null(0) for c in stats]))
 # daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
 _sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
-gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday", pl.lit(True).alias("home")]),
-                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday", pl.lit(False).alias("home")])])
+gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday", pl.lit(True).alias("home"), pl.col("game_id").alias("gid")]),
+                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday", pl.lit(False).alias("home"), pl.col("game_id").alias("gid")])])
             .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
 df = (df.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64))
         .join(gdates, on=["season", "week", "team"], how="left").rename({"gameday": "date"}))
 print("mecze bez daty:", df.filter(pl.col("date").is_null()).height)
-base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date", "home"]
+base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date", "home", "gid"]
 
 players = (df.group_by("player_id")
              .agg(pl.col("player_display_name").last().alias("name"),
@@ -45,6 +45,28 @@ parts = df.filter(pl.col("player_id").is_in(keep)).sort(["season", "week"]).part
 for key, g in parts.items():
     pid = key[0] if isinstance(key, tuple) else key
     (OUT / "logs" / f"{pid}.json").write_text(json.dumps(g.select(base + stats).to_dicts()))
+
+# --- box score'y (uproszczone: QB, RB, WR, TE) - jeden plik na mecz ---
+(OUT / "box").mkdir(parents=True, exist_ok=True)
+meta = {r["game_id"]: r for r in _sch.select(["game_id", "week", "gameday", "away_team", "home_team", "away_score", "home_score"]).to_dicts()}
+bcols = ["player_id", "player_display_name", "position", "team"] + stats
+n_box = 0
+for gid, g in df.filter(pl.col("gid").is_not_null()).partition_by("gid", as_dict=True).items():
+    gid = gid[0] if isinstance(gid, tuple) else gid
+    m = meta.get(gid)
+    if not m:
+        continue
+    ps = []
+    for r in g.select(bcols).to_dicts():
+        row = {"id": r["player_id"], "name": r["player_display_name"], "pos": r["position"], "team": r["team"]}
+        row.update({c: int(r[c]) for c in stats if r[c]})
+        ps.append(row)
+    (OUT / "box" / f"{gid}.json").write_text(json.dumps({
+        "date": m["gameday"], "week": m["week"],
+        "away": {"team": m["away_team"], "score": m["away_score"]}, "home": {"team": m["home_team"], "score": m["home_score"]},
+        "players": ps}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    n_box += 1
+print("box score'y:", n_box, "meczów")
 
 cur = df.filter(pl.col("season") == df["season"].max())
 
