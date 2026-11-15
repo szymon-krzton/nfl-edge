@@ -140,7 +140,7 @@ function ChartBlock({p,log,g,opp,odds,hist,mates}){
     <div className="tiles">{[["prev",`Sezon ${g.season-1}`],["cur",`Sezon ${g.season}`],["h2h","H2H"],["l5","L5"],["l10","L10"],["cu",null]].map(([key,label])=>{
       const vs=rowsFor(key).map(r=>val(r,k)),n=vs.length,hit=L==null?null:vs.filter(v=>v>L).length,pct=hit==null||!n?null:hit/n*100;
       const mix=pct==null?null:`color-mix(in srgb, ${pct>=50?"var(--ac)":"var(--bad)"} ${Math.round(10+Math.abs(pct-50)*.7)}%, var(--card2))`;
-      const main=!n?"–":L!=null?`${hit}/${n}`:(vs.reduce((s,v)=>s+v,0)/n).toFixed(1),sub=!n?"":L!=null?`${Math.round(pct)}%`:`śr. · ${n} gier`;
+      const main=!n?"–":L!=null?`${hit}/${n}`:(vs.reduce((s,v)=>s+v,0)/n).toFixed(1),sub=!n?"":L!=null?`${Math.round(pct)}%`:"";
       const pick=()=>setRg(key);
       return <div key={key} role="button" tabIndex={0} aria-pressed={rg===key} className={`tile${n?"":" empty"}`} style={mix?{background:mix}:undefined}
         onClick={pick} onKeyDown={e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();pick()}}}>
@@ -164,7 +164,8 @@ function CoverageBlock({p,opp,cov,pc}){
     {d?<Plain head={order} rows={[order.map(k=>pc1(d.usage?.[k]))]}/>:<p className="mu">Brak danych o tej obronie.</p>}
     <h3>{p.name} przeciwko rodzajom krycia</h3>
     {rows.length?<Plain head={qb?["Krycie","dropbacki","próby","celne","jardy","TD","INT","EPA/dropback",`% użycia ${opp}`]:["Krycie","targety","przyjęcia","jardy","jardy/target","TD","EPA/target",`% użycia ${opp}`]} rows={rows}/>
-      :<p className="mu">Brak danych o coverage dla tego zawodnika.</p>}</section>;
+      :<p className="mu">Brak danych o coverage dla tego zawodnika.</p>}
+    <p className="mu" style={{fontSize:12}}>Dane FTN o rodzajach krycia pojawiają się dopiero po zakończeniu sezonu, więc to ostatni pełny sezon. Dane z bieżącego sezonu są w bloku „Strefy targetów".</p></section>;
 }
 
 function OthersBlock({p,opp,def,rank}){
@@ -185,9 +186,47 @@ function Rank({r}){
     background:`color-mix(in srgb, ${c} 18%, transparent)`}}>{r}</span>;
 }
 
+const ZD={behind:"Za linią",short:"Krótkie 0–9",mid:"Średnie 10–19",deep:"Głębokie 20+"},ZS={left:"lewa",middle:"środek",right:"prawa"};
+const ZORDER=Object.keys(ZD).flatMap(d=>["left","middle","right"].map(s=>`${d}:${s}`));
+const zname=z=>{const [d,s]=z.split(":");return `${ZD[d]} · ${ZS[s]||s}`};
+
+const ZROWS=[["deep",150],["mid",120],["short",120],["behind",80]],ZCOLS=[["left",.34],["middle",.32],["right",.34]];
+
+function ZonesBlock({p,opp,ins,pz}){
+  if(!ins)return <section className="card"><h2>Strefy targetów</h2><p className="mu">Brak danych bieżącego sezonu. Uruchom ponownie skrypt danych.</p></section>;
+  const d=ins.teams?.[opp],bl=d?.blitz,qb=p.pos==="QB",mine=pz?.zones||{};
+  const W=520,H=520,L=40,R=12,T=10,gap=6,iw=W-L-R,los=T+ZROWS.slice(0,3).reduce((s,r)=>s+r[1],0);
+  const tot=qb?ZORDER.reduce((s,z)=>s+(d?.zones?.[z]?.targets||0),0):Object.values(mine).reduce((s,m)=>s+m.targets,0);
+  const cells=[];let y=T;
+  ZROWS.forEach(([dk,h])=>{let x=L;ZCOLS.forEach(([sk,w])=>{const z=`${dk}:${sk}`,cw=iw*w,m=mine[z],x0=d?.zones?.[z],val=qb?x0?.targets:m?.targets;
+    cells.push({z,x:x+gap/2,y:y+gap/2,w:cw-gap,h:h-gap,m,x0,val:val||0,pct:tot&&val?val/tot*100:null});x+=cw});y+=h});
+  const mcol=r=>r==null?null:r<=10?"var(--bad)":r<=22?"var(--warn)":"var(--ac)";
+  return <section className="card"><h2>Strefy targetów i obrona {opp} <small>sezon {ins.meta.season}, do tygodnia {ins.meta.through_week}</small></h2>
+    {bl&&<p className="mu" style={{margin:"0 0 8px"}}>Blitz {opp}: {bl.pct}% dropbacków (miejsce {bl.rank} w lidze pod względem częstotliwości blitzu)</p>}
+    <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Mapa stref boiska: kolor to ranking obrony, liczba to udział targetów" style={{width:"100%",maxWidth:560,display:"block",margin:"0 auto"}}>
+      <rect x="0" y="0" width={W} height={H} rx="14" fill="#0e2a1b"/>
+      <line x1={L} x2={L} y1={T} y2={H-T} stroke="#fff" strokeOpacity=".25"/><line x1={W-R} x2={W-R} y1={T} y2={H-T} stroke="#fff" strokeOpacity=".25"/>
+      {cells.map(c=>{const r=c.x0?.rank,col=mcol(r),cx=c.x+c.w/2,cy=c.y+c.h/2;
+        return <g key={c.z}>
+          <title>{`${zname(c.z)}: ${c.val} ${qb?"podań obrony":"targetów"}${c.x0?`, oddane ${c.x0.ypt} jardów/target, EPA ${c.x0.epa}, ranking obrony ${r}`:", brak danych o obronie (min. 5 targetów)"}`}</title>
+          <rect x={c.x} y={c.y} width={c.w} height={c.h} rx="8" style={{fill:col?`color-mix(in srgb, ${col} 58%, #0b1f14)`:"#2b3440"}} stroke={col||"#475569"}/>
+          <text x={cx} y={cy+6} textAnchor="middle" fontSize="30" fontWeight="700" fill="#fff" style={{fontFamily:"'Barlow Condensed',sans-serif"}}>{c.pct==null?"–":c.pct<10?`${c.pct.toFixed(1)}%`:`${Math.round(c.pct)}%`}</text>
+          <text x={cx} y={cy+24} textAnchor="middle" fontSize="12" fill="#fff" fillOpacity=".75">{c.val} {qb?"podań":"tg"}</text>
+          {r!=null&&<text x={c.x+c.w-8} y={c.y+17} textAnchor="end" fontSize="12" fontWeight="700" fill="#fff">#{r}</text>}</g>})}
+      <line x1={L-6} x2={W-R} y1={los} y2={los} stroke="#7dd3fc" strokeWidth="2" strokeDasharray="6 4"/>
+      <text x={W-R-6} y={los-5} textAnchor="end" fontSize="11" fill="#7dd3fc">linia wznowienia</text>
+      {[["20",T+ZROWS[0][1]],["10",T+ZROWS[0][1]+ZROWS[1][1]],["0",los]].map(([t,yy])=><text key={t} x={L-8} y={yy+4} textAnchor="end" fontSize="11" fill="#fff" fillOpacity=".6">{t}</text>)}
+    </svg>
+    <div className="chips" style={{justifyContent:"center",fontSize:12,marginTop:10}}>
+      {[["var(--bad)","zły matchup (obrona w top 10)"],["var(--warn)","średni (11–22)"],["var(--ac)","dobry (23–32)"],["#475569","brak danych (<5 targetów)"]].map(([c,t])=>
+        <span key={t} className="mu"><span style={{display:"inline-block",width:10,height:10,borderRadius:3,background:c,marginRight:5}}/>{t}</span>)}</div>
+    <p className="mu" style={{fontSize:12}}>{qb?`Liczba w środku: odsetek podań przeciwko obronie ${opp} w danej strefie. `:"Liczba w środku: odsetek targetów zawodnika w danej strefie. "}
+      Kolor i numer #: ranking obrony {opp} w strefie (1 = najlepsza, wg EPA na target). Atak w górę; strefa = głębokość podania (air yards) × strona boiska, z play-by-play bieżącego sezonu. To przybliżenie ścieżek, a nie ich nazwy.{!qb&&!tot?" Zawodnik nie ma jeszcze targetów w bieżącym sezonie.":""}</p></section>;
+}
+
 function RoutesBlock({p,opp,cov,pc}){
   const d=cov?.teams?.[opp],routes=Object.entries(pc?.routes||{}).sort((a,b)=>b[1].targets-a[1].targets);
-  return <section className="card"><h2>Ścieżki zawodnika i obrona {opp} <small>ścieżki przy targetach</small></h2>
+  return <section className="card"><h2>Ścieżki zawodnika i obrona {opp} <small>ścieżki przy targetach · dane FTN z sezonu {cov?.meta?.def_season??"–"}</small></h2>
     {p.pos==="QB"||!routes.length?<p className="mu">Brak danych o ścieżkach dla tego zawodnika.</p>:
       <Plain head={["Ścieżka","targety","% targetów","ranking obrony","jardy/target oddane","EPA/target oddane"]} rows={routes.map(([r,v])=>{const x=d?.routes?.[r];
         return [r,v.targets,pc1(v.share),
@@ -226,18 +265,19 @@ function matesOf(p,usage,depth){
 
 export default function App(){
   const [games,setGames]=useState(null),[depth,setDepth]=useState({}),[g,setG]=useState(null),[p,setP]=useState(null),[log,setLog]=useState([]),
-    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null);
+    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null);
   useEffect(()=>{get("/data/schedule.json").then(s=>{setGames(s);setG(s[0]||null)}).catch(()=>setGames([]));
     get("/data/depth.json").then(setDepth).catch(()=>{});get("/data/usage.json").then(setUsage).catch(()=>{});
-    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
-  const opp=p&&g?(p.team===g.home_team?g.away_team:g.home_team):"";
-  useEffect(()=>{setLog([]);setPc(null);if(!p)return;
-    get(`/data/logs/${p.player_id}.json`).then(setLog).catch(()=>{});get(`/data/coverage/players/${p.player_id}.json`).then(setPc).catch(()=>{})},[p]);
+    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
+  const opp=p&&g?(p.team===g.home_team?g.away_team:p.team===g.away_team?g.home_team:""):"";
+  useEffect(()=>{setLog([]);setPc(null);setPz(null);if(!p)return;
+    get(`/data/logs/${p.player_id}.json`).then(setLog).catch(()=>{});get(`/data/coverage/players/${p.player_id}.json`).then(setPc).catch(()=>{});get(`/data/inseason/players/${p.player_id}.json`).then(setPz).catch(()=>{})},[p]);
   useEffect(()=>{if(opp)get(`/data/defense/${opp}.json`).then(setDef).catch(()=>setDef(null));else setDef(null)},[opp]);
   const rank=r=>{if(r.depth_rank)return `${r.position}${r.depth_rank}`;
     for(const t of [r.team,...Object.keys(depth)]){const l=depth[t]?.[r.position]||[],i=l.findIndex(x=>x.player_id===r.player_id);
       if(i>=0)return `${r.position}${i+1}`}return "–"};
-  const pick=(x,team,l)=>{setP({player_id:x.player_id,name:x.name,pos:x.pos,team,status:l.s,injury:l.inj});window.scrollTo(0,0)};
+  const pick=(x,team,l)=>{setP({player_id:x.player_id,name:x.name,pos:x.pos,team,status:l.s,injury:l.inj});
+    const gm=(games||[]).find(m=>m.home_team===team||m.away_team===team);if(gm)setG(gm);window.scrollTo(0,0)};
   const Depth=({team})=><section className="card"><h2>{team} <small>depth chart</small></h2>{POS.map(pos=><div key={pos} style={{marginBottom:8}}><span className="mu">{pos}</span>
     <div className="chips">{(depth[team]?.[pos]||[]).map((x,i)=><button key={x.player_id} className="chip" onClick={()=>pick({...x,pos},team,{s:x.status,inj:x.injury})}>
       <span className="mu">{pos}{i+1}</span> {x.name}<Badge s={x.status} inj={x.injury}/>{x.usage!=null&&<span className="mu"> {x.usage}</span>}</button>)}</div></div>)}</section>;
@@ -249,7 +289,7 @@ export default function App(){
   if(p&&g)return <main style={{maxWidth:"none"}}>
     <button className="back" onClick={()=>setP(null)}>← Wróć do meczu {g.away_team} @ {g.home_team}</button>
     <h1>{p.name}<Badge s={p.status} inj={p.injury}/></h1>
-    <div className="mu">{p.pos} · {p.team} vs {opp} · {D(g.gameday,2)}</div>
+    <div className="mu">{p.pos} · {p.team} vs {opp||"–"} · {D(g.gameday,2)}</div>
     <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game}/>
     <div className="cols">
       <div className="col">
@@ -258,8 +298,9 @@ export default function App(){
       </div>
       <div className="col">
         <div style={{order:2}}><CoverageBlock p={p} opp={opp} cov={cov} pc={pc}/></div>
-        <div style={{order:4}}><RoutesBlock p={p} opp={opp} cov={cov} pc={pc}/></div>
-        <div style={{order:5}}><Usage usage={usage} teams={[p.team]} depth={depth} pick={pick}/></div>
+        <div style={{order:4}}><ZonesBlock p={p} opp={opp} ins={ins} pz={pz}/></div>
+        <div style={{order:5}}><RoutesBlock p={p} opp={opp} cov={cov} pc={pc}/></div>
+        <div style={{order:6}}><Usage usage={usage} teams={[p.team]} depth={depth} pick={pick}/></div>
       </div>
     </div>
     {footer}</main>;

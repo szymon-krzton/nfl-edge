@@ -1,1 +1,1 @@
-{"routes": {"SCREEN": {"targets": 1, "share": 100.0}}, "cov": {"COVER_1": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.74}, "MAN": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.74}}, "pass": {}}
+{"routes": {"SCREEN": {"targets": 1, "share": 100.0}}, "cov": {"MAN": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.74}, "COVER_1": {"targets": 1, "rec": 1.0, "yds": 6.0, "td": 0.0, "epa": 0.74}}, "pass": {}}
