@@ -217,7 +217,7 @@ print("usage:", len(usage_out), "drużyn")
 # --- coverage i ścieżki (FTN / nflverse); opcjonalne, nie blokuje reszty danych ---
 try:
     from coverage_data import build_coverage
-    build_coverage(OUT)
+    build_coverage(OUT, int(df["season"].max()))
 except Exception as e:
     print("dane o coverage pominięte:", e)
 

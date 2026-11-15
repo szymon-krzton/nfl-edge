@@ -152,17 +152,21 @@ function ChartBlock({p,log,g,opp,odds,hist,mates}){
   </section>;
 }
 
+const cname=k=>{const s=k.replace(/_/g," ").toLowerCase();return s.charAt(0).toUpperCase()+s.slice(1)};
+
 function CoverageBlock({p,opp,cov,pc}){
+  const [mode,setMode]=useState("mz");
   if(!cov)return <section className="card"><h2>Krycia obrony</h2><p className="mu">Brak danych o coverage (FTN publikuje je po zakończeniu sezonu).</p></section>;
-  const d=cov.teams?.[opp],qb=p.pos==="QB",src=qb?pc?.pass:pc?.cov;
-  const sortU=ks=>[...ks].sort((x,y)=>(d?.usage?.[y]??-1)-(d?.usage?.[x]??-1));
-  const order=[...sortU(COVS.slice(0,2)),...sortU(COVS.slice(2))];
-  const rows=order.filter(k=>src?.[k]).map(k=>{const v=src[k],u=d?.usage?.[k];
-    return qb?[k,v.dropbacks,v.att,v.cmp,v.yds,v.td,v.int,v.epa,pc1(u)]:[k,v.targets,v.rec,v.yds,f1(v.yds,v.targets),v.td,v.epa,pc1(u)]});
+  const d=cov.teams?.[opp],qb=p.pos==="QB",src=qb?pc?.pass:pc?.cov,use=k=>d?.usage?.[k],byUse=ks=>[...ks].sort((x,y)=>(use(y)??-1)-(use(x)??-1));
+  const top=byUse(COVS.slice(2).filter(k=>k!=="OTHER")).slice(0,4);
+  const keys=mode==="mz"?byUse(["ZONE","MAN"]).filter(k=>src?.[k]):top;
+  const rows=keys.map(k=>{const v=src?.[k],u=use(k);
+    if(!v)return [cname(k),...Array(qb?7:6).fill("–"),pc1(u)];
+    return qb?[cname(k),v.dropbacks,v.att,v.cmp,v.yds,v.td,v.int,v.epa,pc1(u)]:[cname(k),v.targets,v.rec,v.yds,f1(v.yds,v.targets),v.td,v.epa,pc1(u)]});
   return <section className="card"><h2>Krycia obrony {opp} i wyniki zawodnika <small>sezony: {cov.meta.seasons.join(", ")}</small></h2>
-    <h3>Użycie coverage przez {opp} (% dropbacków, {cov.meta.def_season})</h3>
-    {d?<Plain head={order} rows={[order.map(k=>pc1(d.usage?.[k]))]}/>:<p className="mu">Brak danych o tej obronie.</p>}
-    <h3>{p.name} przeciwko rodzajom krycia</h3>
+    <div className="chips">
+      <button className="chip" aria-pressed={mode==="mz"} onClick={()=>setMode("mz")}>Man / Zone</button>
+      <button className="chip" aria-pressed={mode==="top"} onClick={()=>setMode("top")}>Top 4 krycia {opp}</button></div>
     {rows.length?<Plain head={qb?["Krycie","dropbacki","próby","celne","jardy","TD","INT","EPA/dropback",`% użycia ${opp}`]:["Krycie","targety","przyjęcia","jardy","jardy/target","TD","EPA/target",`% użycia ${opp}`]} rows={rows}/>
       :<p className="mu">Brak danych o coverage dla tego zawodnika.</p>}
     <p className="mu" style={{fontSize:12}}>Dane FTN o rodzajach krycia pojawiają się dopiero po zakończeniu sezonu, więc to ostatni pełny sezon. Dane z bieżącego sezonu są w bloku „Strefy targetów".</p></section>;

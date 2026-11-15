@@ -7,9 +7,9 @@ import polars as pl
 MAIN = ["COVER_0", "COVER_1", "COVER_2", "2_MAN", "COVER_3", "COVER_4", "COVER_6"]
 
 
-def build_coverage(out: Path):
+def build_coverage(out: Path, season: int):
     parts, seasons = [], []
-    for s in (2023, 2024, 2025, 2026):
+    for s in (season - 1, season):  # poprzedni sezon i (gdy FTN go opublikuje) bieżący
         try:
             p = nfl.load_participation([s])
             if p.height:
