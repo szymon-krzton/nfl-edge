@@ -220,3 +220,10 @@ try:
     build_coverage(OUT)
 except Exception as e:
     print("dane o coverage pominięte:", e)
+
+# --- dane bieżącego sezonu z play-by-play (strefy targetów, blitz); opcjonalne ---
+try:
+    from inseason_data import build_inseason
+    build_inseason(OUT, int(df["season"].max()))
+except Exception as e:
+    print("dane bieżącego sezonu pominięte:", e)
