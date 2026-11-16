@@ -1,1 +1,1 @@
-{"zones": {"behind:right": {"targets": 1, "rec": 1.0, "yds": -2.0, "td": 0.0, "epa": -1.22}, "short:right": {"targets": 3, "rec": 2.0, "yds": 12.0, "td": 0.0, "epa": -1.45}}}
+{"zones": {"short:right": {"targets": 3, "rec": 2.0, "yds": 12.0, "td": 0.0, "epa": -1.45}, "behind:right": {"targets": 1, "rec": 1.0, "yds": -2.0, "td": 0.0, "epa": -1.22}}}

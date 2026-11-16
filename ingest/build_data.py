@@ -25,13 +25,27 @@ df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
         .with_columns([pl.col(c).fill_null(0) for c in stats]))
 # daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
 _sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
-gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday", pl.lit(True).alias("home"), pl.col("game_id").alias("gid")]),
-                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday", pl.lit(False).alias("home"), pl.col("game_id").alias("gid")])])
+def sc(n, alias=None, neg=False):  # kolumna terminarza (lub null, gdy jej brak) w perspektywie drużyny
+    e = pl.col(n) if n in _sch.columns else pl.lit(None, dtype=pl.Float64)
+    return (e * -1 if neg else e).alias(alias or n)
+
+
+# nawierzchnia (trawa / sztuczna) i prime time (kickoff od 19:00 czasu wschodniego)
+surf_e = (pl.when(pl.col("surface").is_null() | (pl.col("surface") == "")).then(pl.lit(None, dtype=pl.Utf8))
+            .when(pl.col("surface").str.to_lowercase().str.contains("grass")).then(pl.lit("grass")).otherwise(pl.lit("turf")).alias("surf")
+          if "surface" in _sch.columns else pl.lit(None, dtype=pl.Utf8).alias("surf"))
+prime_e = ((pl.col("gametime").str.slice(0, 2).cast(pl.Int64, strict=False) >= 19).cast(pl.Int8).alias("prime")
+           if "gametime" in _sch.columns else pl.lit(None, dtype=pl.Int8).alias("prime"))
+
+gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday", pl.lit(True).alias("home"), pl.col("game_id").alias("gid"),
+                                sc("spread_line", "sp"), sc("total_line", "tot"), sc("home_rest", "rest"), sc("roof"), sc("wind"), sc("div_game", "div"), surf_e, prime_e]),
+                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday", pl.lit(False).alias("home"), pl.col("game_id").alias("gid"),
+                                sc("spread_line", "sp", neg=True), sc("total_line", "tot"), sc("away_rest", "rest"), sc("roof"), sc("wind"), sc("div_game", "div"), surf_e, prime_e])])
             .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
 df = (df.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64))
         .join(gdates, on=["season", "week", "team"], how="left").rename({"gameday": "date"}))
 print("mecze bez daty:", df.filter(pl.col("date").is_null()).height)
-base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date", "home", "gid"]
+base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date", "home", "gid", "sp", "tot", "rest", "roof", "wind", "div", "surf", "prime"]
 
 players = (df.group_by("player_id")
              .agg(pl.col("player_display_name").last().alias("name"),
@@ -117,7 +131,8 @@ if todo.height:
     s = todo["season"].min()
     w = todo.filter(pl.col("season") == s)["week"].min()
     games = (todo.filter((pl.col("season") == s) & (pl.col("week") == w))
-                 .select(["game_id", "season", "week", "gameday", "away_team", "home_team"]).to_dicts())
+                 .select(["game_id", "season", "week", "gameday", "away_team", "home_team"]
+                         + [c for c in ("spread_line", "total_line", "roof", "away_rest", "home_rest", "div_game", "surface", "gametime") if c in todo.columns]).to_dicts())
 (OUT / "schedule.json").write_text(json.dumps(games))
 
 # --- statusy: raport kontuzji (OUT / D / Q) i lista rezerwowa kontuzjowanych (IR) ---
@@ -227,3 +242,10 @@ try:
     build_inseason(OUT, int(df["season"].max()))
 except Exception as e:
     print("dane bieżącego sezonu pominięte:", e)
+
+# --- red zone i linia bramkowa z play-by-play; opcjonalne ---
+try:
+    from redzone_data import build_redzone
+    build_redzone(OUT, int(df["season"].max()))
+except Exception as e:
+    print("red zone pominięty:", e)
