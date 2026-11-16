@@ -1,20 +1,30 @@
 name: refresh-data
 on:
   schedule:
-    - cron: "0 8 * * *"          # codziennie rano
-    - cron: "0 20,23 * * 3-5"    # środa-piątek: raporty kontuzji
-    - cron: "*/30 15-23 * * 0"   # niedziela: co 30 min przed meczami
-    - cron: "*/30 22-23 * * 1,4" # poniedziałek i czwartek: przed meczem wieczornym
+    - cron: "0 */3 * * *"      # codziennie co 3 godziny
+    - cron: "30 16-23 * * 0"   # niedziela: dodatkowo co godzinę (statusy, nieaktywni, wyniki meczów)
   workflow_dispatch:
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
 permissions: {contents: write}
 jobs:
   refresh:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.12"}
-      - run: pip install -r ingest/requirements.txt && python ingest/build_data.py
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: ingest/requirements.txt
+      - run: pip install -r ingest/requirements.txt
+      - run: python ingest/build_data.py
       - run: |
           git config user.name "data-bot" && git config user.email "bot@users.noreply.github.com"
-          git add web/public/data && (git commit -m "odświeżenie danych" && git push) || echo "bez zmian"
+          git add web/public/data
+          if git diff --cached --quiet; then echo "bez zmian"; exit 0; fi
+          git commit -m "odświeżenie danych"
+          git pull --rebase
+          git push
