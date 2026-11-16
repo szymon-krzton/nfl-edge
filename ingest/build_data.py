@@ -23,6 +23,7 @@ df = pl.concat(frames, how="diagonal_relaxed")
 stats = [c for c in STAT if c in df.columns]
 df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
         .with_columns([pl.col(c).fill_null(0) for c in stats]))
+
 # daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
 _sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
 def sc(n, alias=None, neg=False):  # kolumna terminarza (lub null, gdy jej brak) w perspektywie drużyny
