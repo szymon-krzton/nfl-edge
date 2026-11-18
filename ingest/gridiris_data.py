@@ -183,5 +183,16 @@ def build_gridiris(out: Path, in_dir: Path = None, players_json: Path = None):
     (gdir / "defense.json").write_text(json.dumps({"meta": meta, "teams": defense}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     for pid, P in pls.items():
         (gdir / "players" / f"{pid}.json").write_text(json.dumps(P, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    names = {p["player_id"]: p["name"] for p in players}
+    tm = {}  # lista zawodników drużyny z ustawieniami (do strony meczu: obrona vs alignment)
+    for pid, P in pls.items():
+        if P["snaps"] < 5:
+            continue
+        tm.setdefault(P["team"], []).append({"id": pid, "name": names.get(pid) or P["name"], "pos": P["pos"], "g": P["games"], "n": P["snaps"],
+                                             "r": P["routes"], "tp": P["tp"], "t": sum(c["t"] for c in P["al"].values()),
+                                             "al": {k: {"n": c["n"], "t": c["t"]} for k, c in P["al"].items()}})
+    for t in tm:
+        tm[t].sort(key=lambda x: -x["r"])
+    (gdir / "teams.json").write_text(json.dumps(tm, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"gridiris {season}: {len(games)} meczów (tygodnie {weeks}), {len(defense)} obron, {len(pls)} zawodników")
     return meta

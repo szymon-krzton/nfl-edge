@@ -237,7 +237,6 @@ function RedZoneBlock({p,opp,rz,usage}){
 }
 
 const AL=[["slot","Slot"],["wide","Wide"],["tight","Tight (inline)"],["backfield","Backfield"]];
-const ypr=c=>c&&c.r?(c.yds/c.r).toFixed(2):"–";
 const gname=k=>k==="ZONE"?"Zone":k==="MAN"?"Man":k;
 
 function GiMeta({gd,gp}){
@@ -249,14 +248,14 @@ function AlignmentBlock({p,opp,gd,gp}){
   const d=gd.teams?.[opp]?.al||{},tot=gp.snaps||0,tt=Object.values(gp.al).reduce((s,c)=>s+c.t,0);
   const rows=AL.filter(([k])=>gp.al[k]).map(([k,n])=>{const c=gp.al[k],x=d[k];
     return [n,<span style={{display:"inline-flex",alignItems:"center",gap:8}}><span className="bar"><i style={{width:`${c.n/tot*100}%`}}/></span>{pc1(c.n/tot*100)}</span>,
-      c.r,c.t,tt?pc1(c.t/tt*100):"–",c.yds,ypr(c),x?ypr(x):"–",x?.rank?<Rank r={x.rank}/>:"–"]});
-  const side=["left","right"].filter(k=>gp.side[k]).map(k=>{const c=gp.side[k];return [k==="left"?"Lewa":"Prawa",pc1(c.n/tot*100),c.r,c.t,c.yds,ypr(c)]});
+      c.r,c.t,tt?pc1(c.t/tt*100):"–",c.yds,x?.rank?<Rank r={x.rank}/>:"–"]});
+  const side=["left","right"].filter(k=>gp.side[k]).map(k=>{const c=gp.side[k];return [k==="left"?"Lewa":"Prawa",pc1(c.n/tot*100),c.r,c.t,c.yds]});
   return <section className="card"><h2>Alignment i strony boiska <small>ustawienie przed snapem w podaniach</small></h2>
     <GiMeta gd={gd} gp={gp}/>
     <p className="mu" style={{margin:"0 0 8px"}}>Udział w trasach: <b style={{color:"var(--tx)"}}>{gp.tp?pc1(gp.routes/gp.tp*100):"–"}</b> podań drużyny ({gp.routes} tras w {gp.tp} podaniach).</p>
-    <Plain head={["Ustawienie","% snapów","trasy","targety","% targetów","jardy","jardy/trasę",`oddane ${opp}: jardy/trasę`,"ranking obrony"]} rows={rows}/>
+    <Plain head={["Ustawienie","% snapów","trasy","targety","% targetów","jardy",`ranking obrony ${opp}`]} rows={rows}/>
     <h3>Strona boiska</h3>
-    <Plain head={["Strona","% snapów","trasy","targety","jardy","jardy/trasę"]} rows={side}/>
+    <Plain head={["Strona","% snapów","trasy","targety","jardy"]} rows={side}/>
     <p className="mu" style={{fontSize:12}}>Ranking: 1 = najlepsza obrona (najmniej oddanych jardów na trasę, min. 15 tras, liczony gdy próbkę ma co najmniej 8 obron); kolory jak przy ścieżkach. Tight oznacza ustawienie w linii (inline), także dla zawodników innych pozycji.</p></section>;
 }
 
@@ -265,24 +264,53 @@ function CoverageGI({p,opp,gd,gp}){
   const d=gd.teams?.[opp],use=k=>d?.usage?.[k],byUse=ks=>[...ks].sort((x,y)=>(use(y)??-1)-(use(x)??-1));
   const top=byUse(["Cover 0","Cover 1","Cover 2","2-Man","Cover 3","Cover 4","Cover 6"]).slice(0,4);
   const keys=mode==="mz"?byUse(["ZONE","MAN"]):top;
-  const rows=keys.map(k=>{const c=gp.cv[k];return c?[gname(k),c.r,c.t,c.rec,c.yds,ypr(c),c.td,pc1(use(k))]:[gname(k),...Array(6).fill("–"),pc1(use(k))]});
+  const rows=keys.map(k=>{const c=gp.cv[k];return c?[gname(k),c.r,c.t,c.rec,c.yds,c.td,pc1(use(k))]:[gname(k),...Array(5).fill("–"),pc1(use(k))]});
   return <section className="card"><h2>Krycia obrony {opp} i wyniki zawodnika <small>Gridiris, bieżący sezon</small></h2>
     <GiMeta gd={gd} gp={gp}/>
     <div className="chips">
       <button className="chip" aria-pressed={mode==="mz"} onClick={()=>setMode("mz")}>Man / Zone</button>
       <button className="chip" aria-pressed={mode==="top"} onClick={()=>setMode("top")}>Top 4 krycia {opp}</button></div>
-    <Plain head={["Krycie","trasy","targety","przyjęcia","jardy","jardy/trasę","TD",`% użycia ${opp}`]} rows={rows}/>
+    <Plain head={["Krycie","trasy","targety","przyjęcia","jardy","TD",`% użycia ${opp}`]} rows={rows}/>
     <p className="mu" style={{fontSize:12}}>Rodzaj krycia jest szacowany przez Gridiris (est.); część podań jest oznaczona jako niejasna lub niesklasyfikowana i nie wchodzi do powyższych kategorii. Man = Cover 0/1 i 2-Man, Zone = Cover 2/3/4/6.</p></section>;
 }
 
 function RoutesGI({p,opp,gd,gp}){
   const d=gd.teams?.[opp]?.rt||{},tot=Object.values(gp.rt).reduce((s,c)=>s+c.r,0);
   const rows=Object.entries(gp.rt).sort((a,b)=>b[1].r-a[1].r).map(([k,c])=>{const x=d[k];
-    return [k,c.r,pc1(c.r/tot*100),c.t,c.rec,c.yds,ypr(c),x?ypr(x):"–",x?.rank?<Rank r={x.rank}/>:"–"]});
+    return [k,c.r,pc1(c.r/tot*100),c.t,c.rec,c.yds,x?.rank?<Rank r={x.rank}/>:"–"]});
   return <section className="card"><h2>Ścieżki zawodnika i obrona {opp} <small>Gridiris, bieżący sezon</small></h2>
     <GiMeta gd={gd} gp={gp}/>
-    {rows.length?<Plain head={["Ścieżka","trasy","% tras","targety","przyjęcia","jardy","jardy/trasę",`oddane ${opp}: jardy/trasę`,"ranking obrony"]} rows={rows}/>:<p className="mu">Brak tras zawodnika w zaimportowanych meczach.</p>}
+    {rows.length?<Plain head={["Ścieżka","trasy","% tras","targety","przyjęcia","jardy",`ranking obrony ${opp}`]} rows={rows}/>:<p className="mu">Brak tras zawodnika w zaimportowanych meczach.</p>}
     <p className="mu" style={{fontSize:12}}>Trasy to wszystkie ścieżki zawodnika w podaniach (nie tylko targety). Ranking: 1 = najlepsza obrona (najmniej jardów na trasę; min. 15 tras); kolory jak wcześniej.</p></section>;
+}
+
+const tint=r=>r==null?null:`color-mix(in srgb, ${r<=10?"var(--bad)":r<=22?"var(--warn)":"var(--ac)"} 38%, var(--card2))`;
+
+function MatchupPage({g,gd,gt,onBack,pick}){
+  const [only,setOnly]=useState("");
+  const ts=[g.away_team,g.home_team],opp=t=>t===g.away_team?g.home_team:g.away_team;
+  if(!gd)return <><button className="back" onClick={onBack}>← Wróć</button><h1>{g.away_team} @ {g.home_team}</h1><p className="mu">Brak danych Gridiris. Zaimportuj mecze skryptem ingest/gridiris_import.py i uruchom odświeżenie danych.</p></>;
+  const box=t=>{const d=gd.teams?.[t],al=d?.al||{},tot=Object.values(al).reduce((s,c)=>s+c.t,0);
+    const worst=AL.map(([k,n])=>[n,al[k]?.rank]).filter(x=>x[1]!=null).sort((a,b)=>b[1]-a[1])[0];
+    return <section className="card" key={t}><h2>Obrona {t} <small>{d?`${d.pp} podań w próbce`:"brak danych"}</small></h2>
+      {worst&&<p className="mu" style={{margin:"0 0 8px"}}>Najsłabiej broni: <b style={{color:"var(--tx)"}}>{worst[0]}</b> (miejsce {worst[1]} z 32)</p>}
+      {d?<Plain head={["Ustawienie","trasy","targety","% targetów","przyjęcia","jardy","TD","ranking"]} rows={AL.filter(([k])=>al[k]).map(([k,n])=>{const c=al[k];
+        return [n,c.r,c.t,tot?pc1(c.t/tot*100):"–",c.rec,c.yds,c.td,c.rank?<Rank r={c.rank}/>:"–"]})}/>:<p className="mu">Obrona nie ma jeszcze zaimportowanych meczów.</p>}</section>};
+  const list=ts.filter(t=>!only||t===only).flatMap(t=>(gt?.[t]||[]).map(x=>({...x,team:t})));
+  const rows=list.map(x=>{const od=gd.teams?.[opp(x.team)]?.al||{};
+    return [<button className="link" onClick={()=>pick({player_id:x.id,name:x.name,pos:x.pos},x.team,{s:"",inj:""})}>{x.name}</button>,x.team,x.pos,
+      x.tp?pc1(x.r/x.tp*100):"–",...AL.map(([k])=>{const c=x.al[k],r=od[k]?.rank,share=c?c.n/x.n*100:0;
+        return <span title={c?`${c.n} snapów, ${c.t} targetów`:"brak"} style={{display:"inline-block",minWidth:56,padding:"2px 8px",borderRadius:6,background:share>=5?tint(r):"transparent",opacity:share>=5?1:.45}}>{c?pc1(share):"–"}</span>}),x.t]});
+  return <>
+    <button className="back" onClick={onBack}>← Wróć</button>
+    <h1>{g.away_team} @ {g.home_team} <span className="mu" style={{fontSize:18}}>alignment</span></h1>
+    <div className="grid">{ts.map(box)}</div>
+    <section className="card"><h2>Zawodnicy i ich ustawienia <small>kolor komórki = ranking obrony rywala w danym ustawieniu (zielony: przecieka)</small></h2>
+      <div className="chips"><button className="chip" aria-pressed={only===""} onClick={()=>setOnly("")}>Obie drużyny</button>
+        {ts.map(t=><button key={t} className="chip" aria-pressed={only===t} onClick={()=>setOnly(t)}>{t}</button>)}</div>
+      {rows.length?<Plain head={["Zawodnik","Drużyna","Poz.","% tras drużyny",...AL.map(a=>`% snapów ${a[1].split(" ")[0]}`),"targety"]} rows={rows}/>:<p className="mu">Brak zawodników z danymi Gridiris dla tego meczu.</p>}
+      <p className="mu" style={{fontSize:12}}>Udział snapów w podaniach według ustawienia przed snapem (Gridiris, bieżący sezon, minimum 5 snapów). Zielone komórki to ustawienia, w których obrona rywala radzi sobie najsłabiej (ranking liczony z oddanych jardów na trasę; wymaga próbki co najmniej 8 obron). Kliknij nazwisko, aby otworzyć kartę zawodnika.</p></section>
+  </>;
 }
 
 function OthersBlock({p,opp,def,rank}){
@@ -382,10 +410,10 @@ function matesOf(p,usage,depth){
 
 export default function App(){
   const [games,setGames]=useState(null),[depth,setDepth]=useState({}),[g,setG]=useState(null),[p,setP]=useState(null),[log,setLog]=useState([]),
-    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null);
+    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null),[gt,setGt]=useState(null),[view,setView]=useState("");
   useEffect(()=>{get("/data/schedule.json").then(s=>{setGames(s);setG(s[0]||null)}).catch(()=>setGames([]));
     get("/data/depth.json").then(setDepth).catch(()=>{});get("/data/usage.json").then(setUsage).catch(()=>{});
-    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
+    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/gridiris/teams.json").then(setGt).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
   const opp=p&&g?(p.team===g.home_team?g.away_team:p.team===g.away_team?g.home_team:""):"";
   useEffect(()=>{setLog([]);setPc(null);setPz(null);setGp(null);if(!p)return;
     get(`/data/logs/${p.player_id}.json`).then(setLog).catch(()=>{});get(`/data/coverage/players/${p.player_id}.json`).then(setPc).catch(()=>{});get(`/data/inseason/players/${p.player_id}.json`).then(setPz).catch(()=>{});get(`/data/gridiris/players/${p.player_id}.json`).then(setGp).catch(()=>{})},[p]);
@@ -394,7 +422,7 @@ export default function App(){
     for(const t of [r.team,...Object.keys(depth)]){const l=depth[t]?.[r.position]||[],i=l.findIndex(x=>x.player_id===r.player_id);
       if(i>=0)return `${r.position}${i+1}`}return "–"};
   const pick=(x,team,l)=>{setP({player_id:x.player_id,name:x.name,pos:x.pos,team,status:l.s,injury:l.inj});
-    const gm=(games||[]).find(m=>m.home_team===team||m.away_team===team);if(gm)setG(gm);window.scrollTo(0,0)};
+    const gm=(games||[]).find(m=>m.home_team===team||m.away_team===team);if(gm)setG(gm);setView("");window.scrollTo(0,0)};
   const Depth=({team})=><section className="card"><h2>{team} <small>depth chart</small></h2>{POS.map(pos=><div key={pos} style={{marginBottom:8}}><span className="mu">{pos}</span>
     <div className="chips">{(depth[team]?.[pos]||[]).map((x,i)=><button key={x.player_id} className="chip" onClick={()=>pick({...x,pos},team,{s:x.status,inj:x.injury})}>
       <span className="mu">{pos}{i+1}</span> {x.name}<Badge s={x.status} inj={x.injury}/>{x.usage!=null&&<span className="mu"> {x.usage}</span>}</button>)}</div></div>)}</section>;
@@ -403,11 +431,13 @@ export default function App(){
     Źródła danych: statystyki, terminarze i składy – nflverse; dane o rodzajach krycia (coverage) i ścieżkach – FTN Data via nflverse, na licencji{" "}
     <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer" style={{color:"var(--ac)"}}>CC BY-SA 4.0</a>; alignment, ścieżki i krycie (est.) z bieżącego sezonu – Gridiris (dane NFL Next Gen Stats); depth charty i statusy kontuzji – ESPN.
     Kursy: Superbet (PL) via OddsPapi; mogą różnić się od aktualnych na stronie bukmachera. Aplikacja ma charakter informacyjny i nie gwarantuje wyników zakładów. Hazard wiąże się z ryzykiem, 18+.</footer>;
+  if(view==="matchup"&&g)return <main style={{maxWidth:"none"}}><MatchupPage g={g} gd={gd} gt={gt} onBack={()=>setView("")} pick={pick}/>{footer}</main>;
   if(p&&g)return <main style={{maxWidth:"none"}}>
     <button className="back" onClick={()=>setP(null)}>← Wróć do meczu {g.away_team} @ {g.home_team}</button>
     <h1>{p.name}<Badge s={p.status} inj={p.injury}/></h1>
     <div className="mu">{p.pos} · {p.team} vs {opp||"–"} · {D(g.gameday,2)}</div>
     <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game}/>
+    <div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment</button></div>
     <div className="cols">
       <div className="col">
         <div style={{order:1}}><ChartBlock key={p.player_id} p={p} log={log} g={g} opp={opp} odds={odds} hist={hist} mates={matesOf(p,usage,depth)}/></div>
@@ -426,5 +456,6 @@ export default function App(){
   return <main><h1>NFL Edge</h1><p className="mu">Wybierz mecz, a potem zawodnika z depth chartu.</p>
     {!games.length&&<p className="mu">Brak nadchodzących meczów w terminarzu.</p>}
     <div className="chips">{games.map(x=><button key={x.game_id} className="chip" aria-pressed={g?.game_id===x.game_id} onClick={()=>setG(x)}>{x.away_team} @ {x.home_team} <span className="mu">{D(x.gameday,2)}</span></button>)}</div>
+    {g&&<div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment</button></div>}
     {g&&<div className="grid"><Depth team={g.away_team}/><Depth team={g.home_team}/></div>}{footer}</main>;
 }
