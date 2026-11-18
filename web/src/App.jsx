@@ -7,7 +7,7 @@ const TABS={
   WR:[["receiving_yards","Rec yds"],["receptions","Receptions"],["targets","Targets"],["td","TD"],["rushing_yards","Rush yds"]]};
 TABS.TE=TABS.WR;
 const RANGES=[["prev","Poprzedni sezon"],["cur","Obecny sezon"],["h2h","H2H"],["l5","L5"],["l10","L10"]];
-const MAIN={QB:["attempts","completions","passing_yards","passing_tds","rushing_yards"],RB:["carries","rushing_yards","targets","receptions","receiving_yards"],
+const MAIN={QB:["attempts","completions","passing_yards","passing_tds","rushing_yards"],RB:["carries","rushing_yards","rushing_tds","targets","receptions","receiving_yards","receiving_tds"],
   WR:["targets","receptions","receiving_yards","receiving_tds"],TE:["targets","receptions","receiving_yards","receiving_tds"]};
 const COVS=["MAN","ZONE","COVER_0","COVER_1","COVER_2","2_MAN","COVER_3","COVER_4","COVER_6","OTHER"];
 const pc1=v=>v==null?"–":`${v.toFixed(1)}%`;
