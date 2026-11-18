@@ -23,7 +23,6 @@ df = pl.concat(frames, how="diagonal_relaxed")
 stats = [c for c in STAT if c in df.columns]
 df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
         .with_columns([pl.col(c).fill_null(0) for c in stats]))
-
 # daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
 _sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
 def sc(n, alias=None, neg=False):  # kolumna terminarza (lub null, gdy jej brak) w perspektywie drużyny
@@ -124,14 +123,14 @@ for team in cur["opponent_team"].unique().to_list():
 
 # --- terminarz: najbliższa kolejka ---
 season = int(df["season"].max())
+import datetime as _dt
 sch = (nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG")
           .with_columns(pl.col("gameday").cast(pl.Utf8)))
 todo = sch.filter(pl.col("home_score").is_null())
 games = []
 if todo.height:
-    s = todo["season"].min()
-    w = todo.filter(pl.col("season") == s)["week"].min()
-    games = (todo.filter((pl.col("season") == s) & (pl.col("week") == w))
+    # wszystkie jeszcze nierozegrane mecze z najbliższych 8 dni (także z następnego tygodnia, np. czwartkowy)
+    games = (todo.filter(pl.col("gameday") <= str(_dt.date.today() + _dt.timedelta(days=8))).sort("gameday")
                  .select(["game_id", "season", "week", "gameday", "away_team", "home_team"]
                          + [c for c in ("spread_line", "total_line", "roof", "away_rest", "home_rest", "div_game", "surface", "gametime") if c in todo.columns]).to_dicts())
 (OUT / "schedule.json").write_text(json.dumps(games))
@@ -250,3 +249,10 @@ try:
     build_redzone(OUT, int(df["season"].max()))
 except Exception as e:
     print("red zone pominięty:", e)
+
+# --- Gridiris: alignment, ścieżki i krycie (est.) z ręcznie importowanych meczów (ingest/gridiris/*.json); opcjonalne ---
+try:
+    from gridiris_data import build_gridiris
+    build_gridiris(OUT)
+except Exception as e:
+    print("gridiris pominięty:", e)
