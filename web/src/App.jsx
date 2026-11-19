@@ -24,7 +24,7 @@ TABS.TE=TABS.WR;
 /** Zakresy meczów: poprzedni sezon, bieżący, H2H, L5, L10 (kafelki pod wykresem dodają jeszcze zakres własny). */
 const RANGES=[["prev","Poprzedni sezon"],["cur","Obecny sezon"],["h2h","H2H"],["l5","L5"],["l10","L10"]];
 /** Kolumny statystyk w tabeli „Inni zawodnicy” dla każdej pozycji. */
-const MAIN={QB:["attempts","completions","passing_yards","passing_tds","rushing_yards"],RB:["carries","rushing_yards","targets","receptions","receiving_yards"],
+const MAIN={QB:["attempts","completions","passing_yards","passing_tds","rushing_yards"],RB:["carries","rushing_yards","rushing_tds","targets","receptions","receiving_yards","receiving_tds"],
   WR:["targets","receptions","receiving_yards","receiving_tds"],TE:["targets","receptions","receiving_yards","receiving_tds"]};
 /** Rodzaje krycia z danych FTN (blok krycia na danych z poprzedniego sezonu), w domyślnej kolejności. */
 const COVS=["MAN","ZONE","COVER_0","COVER_1","COVER_2","2_MAN","COVER_3","COVER_4","COVER_6","OTHER"];
