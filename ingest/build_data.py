@@ -1,4 +1,13 @@
-"""Pobiera dane nflverse i zapisuje JSON-y dla frontendu (web/public/data)."""
+"""Główny skrypt budujący dane dla aplikacji (GitHub Actions uruchamia go co kilka godzin, można też ręcznie).
+
+Pobiera statystyki, terminarze, depth charty i kontuzje (nflverse, ESPN) i zapisuje JSON-y w web/public/data:
+  players.json, logs/<id>.json  - zawodnicy i logi ich meczów (z kontekstem: spread, total, dach, odpoczynek, dom/wyjazd, data)
+  box/<game_id>.json            - uproszczone box score'y (QB, RB, WR, TE)
+  defense/<TEAM>.json           - obrony: średnie oddawane pozycjom i ostatnie wyniki zawodników
+  schedule.json, depth.json, usage.json - nadchodzące mecze, depth charty ze statusami, usage zawodników
+Na końcu wywołuje moduły opcjonalne (błąd jednego nie blokuje reszty): coverage_data (FTN, poprzedni sezon), inseason_data
+(strefy targetów i blitz), redzone_data oraz gridiris_data (alignment, ścieżki i krycie z ręcznie importowanych meczów).
+Kursy generuje osobny skrypt odds_data.py, a dane Gridiris trafiają przez gridiris_import.py do ingest/gridiris/*.json."""
 import json
 from pathlib import Path
 import nflreadpy as nfl
@@ -26,6 +35,9 @@ df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
 # daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
 _sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
 def sc(n, alias=None, neg=False):  # kolumna terminarza (lub null, gdy jej brak) w perspektywie drużyny
+    """Zwraca kolumnę terminarza `n` jako wyrażenie polars w perspektywie drużyny (przy neg=True ze zmienionym
+    znakiem, np. spread dla wyjazdu). Gdy kolumny brak w danych, zwraca null.
+    """
     e = pl.col(n) if n in _sch.columns else pl.lit(None, dtype=pl.Float64)
     return (e * -1 if neg else e).alias(alias or n)
 
@@ -169,6 +181,9 @@ except Exception as e:
     print("ESPN niedostępny, zostają dane nflverse:", e)
 
 def entry(pid, name, **kw):
+    """Tworzy wpis zawodnika do depth.json: id, nazwisko, status kontuzji (Q/D/OUT/IR) i jej opis oraz dodatkowe
+    pola (np. usage).
+    """
     st = status.get(pid, {})
     return {"player_id": pid, "name": name, "status": st.get("status", ""), "injury": st.get("injury", ""), **kw}
 

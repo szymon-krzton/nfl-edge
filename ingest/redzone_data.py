@@ -8,6 +8,10 @@ import polars as pl
 
 
 def build_redzone(out: Path, season: int):
+    """Z akcji w red zone (do 20 jardów, bez klęknięć, spike'ów i prób na 2 punkty) liczy tygodniowe targety, biegi
+    i TD zawodników (strefy do 20/10/5 jardów), sumy drużyn oraz skuteczność obron (akcje i TD z rankingiem).
+    Zapisuje redzone.json; okna L3/L5 liczy frontend.
+    """
     cols = ["week", "season_type", "posteam", "defteam", "yardline_100", "pass_attempt", "rush_attempt", "receiver_player_id",
             "rusher_player_id", "pass_touchdown", "rush_touchdown", "qb_kneel", "qb_spike", "two_point_attempt"]
     pbp = nfl.load_pbp([season]).select(cols).filter(pl.col("season_type") == "REG")
@@ -23,6 +27,9 @@ def build_redzone(out: Path, season: int):
     ca = pbp.filter(pl.col("rush_attempt") == 1, pl.col("rusher_player_id").is_not_null())
 
     def counts(df, keys, td):
+        """Grupuje akcje po kluczach i liczy: wszystkie w red zone (n20), do 10 (n10) i do 5 jardów (n5) oraz
+        przyłożenia z kolumny td.
+        """
         return df.group_by(keys).agg(pl.len().alias("n20"), (yl <= 10).sum().alias("n10"), (yl <= 5).sum().alias("n5"),
                                      num(td).sum().alias("td"))
 
@@ -43,6 +50,9 @@ def build_redzone(out: Path, season: int):
             a[off], a[off + 2], a[off + 4] = r["n20"], r["n10"], r["n5"]
 
     def dstats(df, min_plays):
+        """Statystyki obron w red zone: liczba podań i biegów, TD oraz rankingi (ogółem, przeciw podaniom, przeciw
+        biegom; 1 = najmniej TD na akcję) dla obron z minimalną liczbą akcji.
+        """
         d = (df.group_by("defteam").agg((pl.col("pass_attempt") == 1).sum().alias("pa"), (pl.col("rush_attempt") == 1).sum().alias("ra"),
                                         num("pass_touchdown").sum().alias("ptd"), num("rush_touchdown").sum().alias("rtd"))
                .with_columns((pl.col("pa") + pl.col("ra")).alias("n"), ((pl.col("ptd") + pl.col("rtd")) / (pl.col("pa") + pl.col("ra"))).alias("rate"),

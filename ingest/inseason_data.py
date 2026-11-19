@@ -10,6 +10,10 @@ import polars as pl
 
 
 def build_inseason(out: Path, season: int):
+    """Z play-by-play bieżącego sezonu liczy strefy targetów (głębokość podania x strona boiska): per obrona
+    (targety, jardy i EPA na target, ranking) i per odbiorca. Dokłada częstotliwość blitzów z FTN charting,
+    jeśli dostępna. Zapisuje inseason/defense.json i inseason/players/<id>.json.
+    """
     cols = ["week", "game_id", "play_id", "season_type", "defteam", "qb_dropback", "pass_attempt", "air_yards",
             "pass_location", "receiver_player_id", "complete_pass", "yards_gained", "pass_touchdown", "epa"]
     pbp = nfl.load_pbp([season]).select(cols).filter(pl.col("season_type") == "REG")

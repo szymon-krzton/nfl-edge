@@ -8,6 +8,11 @@ MAIN = ["COVER_0", "COVER_1", "COVER_2", "2_MAN", "COVER_3", "COVER_4", "COVER_6
 
 
 def build_coverage(out: Path, season: int):
+    """Łączy participation (FTN: rodzaj krycia, ścieżka głównego odbiorcy) z play-by-play dla poprzedniego i, jeśli
+    opublikowano, bieżącego sezonu. Zapisuje coverage/defense.json (użycie krycia i ranking obron wobec ścieżek)
+    oraz coverage/players/<id>.json (wyniki zawodników wobec krycia i rozkład ścieżek przy targetach; dla QB
+    statystyki podań).
+    """
     parts, seasons = [], []
     for s in (season - 1, season):  # poprzedni sezon i (gdy FTN go opublikuje) bieżący
         try:

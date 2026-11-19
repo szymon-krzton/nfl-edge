@@ -17,6 +17,9 @@ S.headers["User-Agent"] = "nfl-edge/0.1"
 
 
 def get(url):
+    """GET z trzema próbami i rosnącą przerwą oraz krótką pauzą po sukcesie (żeby nie obciążać nieoficjalnego API);
+    zwraca JSON albo None.
+    """
     for i in range(3):
         try:
             r = S.get(url, timeout=15)
@@ -29,12 +32,18 @@ def get(url):
 
 
 def norm(s):
+    """Nazwisko bez akcentów i znaków specjalnych, małymi literami, bez przyrostków (Jr, Sr, II...), do
+    dopasowywania nazw między źródłami.
+    """
     s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
     s = re.sub(r"[^a-z ]", "", s)
     return " ".join(w for w in s.split() if w not in ("jr", "sr", "ii", "iii", "iv"))
 
 
 def id_maps(players):
+    """Mapy do łączenia identyfikatorów: ESPN id -> gsis_id (z nflverse load_ff_playerids) oraz (nazwisko, drużyna)
+    -> player_id z tabeli zawodników (zapas, gdy id nie ma w mapie).
+    """
     by_espn = {}
     try:
         for r in nfl.load_ff_playerids().select(["espn_id", "gsis_id"]).drop_nulls().to_dicts():
@@ -46,6 +55,7 @@ def id_maps(players):
 
 
 def pos_of(a):
+    """Pozycja zawodnika z obiektu ESPN (obsługuje słownik z polem abbreviation albo zwykły tekst)."""
     p = a.get("position")
     return (p.get("abbreviation") if isinstance(p, dict) else p) or ""
 

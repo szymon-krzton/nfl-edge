@@ -1,27 +1,57 @@
+/**
+ * NFL Edge - aplikacja do analizy statystyk NFL pod kątem typowania (React + Vite).
+ * Cały interfejs jest w tym pliku. Dane to statyczne pliki JSON z web/public/data (generują je skrypty z ingest/),
+ * wczytywane przez fetch. Widoki: ekran główny (mecz + depth charty), karta zawodnika (wykres, krycia, alignment,
+ * red zone, strefy, ścieżki, usage) i podstrona meczu (alignment obron).
+ */
 import {useEffect,useMemo,useState} from "react";
+/**
+ * Pobiera JSON z adresu; przy kodzie innym niż 2xx odrzuca obietnicę (wywołanie z .catch pokazuje wtedy stan
+ * „brak danych”).
+ */
 const get=u=>fetch(u).then(r=>r.ok?r.json():Promise.reject(u));
+/** Pozycje ofensywne obsługiwane w aplikacji. */
 const POS=["QB","RB","WR","TE"];
+/**
+ * Zakładki statystyk pod wykresem dla każdej pozycji: [klucz w logu, etykieta]. Klucz „td” to suma TD z biegu
+ * i z odbioru.
+ */
 const TABS={
   QB:[["passing_yards","Pass yds"],["passing_tds","Pass TD"],["completions","Completions"],["attempts","Attempts"],["rushing_yards","Rush yds"],["passing_interceptions","INT"]],
   RB:[["rushing_yards","Rush yds"],["carries","Carries"],["receptions","Receptions"],["receiving_yards","Rec yds"],["targets","Targets"],["td","TD"]],
   WR:[["receiving_yards","Rec yds"],["receptions","Receptions"],["targets","Targets"],["td","TD"],["rushing_yards","Rush yds"]]};
 TABS.TE=TABS.WR;
+/** Zakresy meczów: poprzedni sezon, bieżący, H2H, L5, L10 (kafelki pod wykresem dodają jeszcze zakres własny). */
 const RANGES=[["prev","Poprzedni sezon"],["cur","Obecny sezon"],["h2h","H2H"],["l5","L5"],["l10","L10"]];
-const MAIN={QB:["attempts","completions","passing_yards","passing_tds","rushing_yards"],RB:["carries","rushing_yards","rushing_tds","targets","receptions","receiving_yards","receiving_tds"],
+/** Kolumny statystyk w tabeli „Inni zawodnicy” dla każdej pozycji. */
+const MAIN={QB:["attempts","completions","passing_yards","passing_tds","rushing_yards"],RB:["carries","rushing_yards","targets","receptions","receiving_yards"],
   WR:["targets","receptions","receiving_yards","receiving_tds"],TE:["targets","receptions","receiving_yards","receiving_tds"]};
+/** Rodzaje krycia z danych FTN (blok krycia na danych z poprzedniego sezonu), w domyślnej kolejności. */
 const COVS=["MAN","ZONE","COVER_0","COVER_1","COVER_2","2_MAN","COVER_3","COVER_4","COVER_6","OTHER"];
+/** Formatuje liczbę jako procent z jednym miejscem po przecinku; null daje myślnik. */
 const pc1=v=>v==null?"–":`${v.toFixed(1)}%`;
+/** Formatuje datę ISO jako D.MM; y=1 dodaje rok dwucyfrowy, y=2 pełny rok; pusty tekst, gdy brak daty. */
 const D=(s,y=0)=>s&&s.length>=10?`${+s.slice(8,10)}.${s.slice(5,7)}${y===2?`.${s.slice(0,4)}`:y===1?`.${s.slice(2,4)}`:""}`:"";
+/** Dzieli a przez b i zaokrągla do jednego miejsca po przecinku; przy b=0 zwraca myślnik (np. jardy na target). */
 const f1=(a,b)=>b?(a/b).toFixed(1):"–";
+/** Wartość statystyki k z wiersza logu r; dla klucza „td” suma TD z biegu i z odbioru. */
 const val=(r,k)=>k==="td"?(r.rushing_tds||0)+(r.receiving_tds||0):(r[k]||0);
+/** Średnia pola c po wierszach (jedno miejsce po przecinku), myślnik dla pustej listy. */
 const avg=(rows,c)=>rows.length?(rows.reduce((a,r)=>a+(r[c]||0),0)/rows.length).toFixed(1):"–";
+/** Plakietka statusu kontuzji: Q/D/DTD na pomarańczowo, OUT/IR na czerwono; tytuł pokazuje rodzaj urazu. */
 const Badge=({s,inj})=>s?<span className={`badge${["Q","D","DTD"].includes(s)?" w":""}`} title={inj}>{s}</span>:null;
 
+/** Prosta tabela: head to nagłówki kolumn, rows to tablica wierszy (komórki mogą być elementami JSX). */
 function Plain({head,rows}){
   return <div className="t"><table><thead><tr>{head.map(h=><th key={h}>{h.replace(/_/g," ")}</th>)}</tr></thead><tbody>
     {rows.map((r,i)=><tr key={i}>{r.map((c,j)=><td key={j}>{c}</td>)}</tr>)}</tbody></table></div>;
 }
 
+/**
+ * Wykres słupkowy SVG wyników w kolejnych meczach. Słupki są zielone, gdy wynik przekracza linię bukmachera
+ * (przerywana), pod nimi widać przeciwnika (@ wyjazd, vs dom) i pełną datę. Kliknięcie słupka wywołuje onPick
+ * (box score). Gdy brak meczów, pokazuje komunikat empty.
+ */
 function Chart({data,line,empty,onPick}){
   const n=data.length,W=720,H=340,L=34,R=64,T=24,slot=(W-L-R)/Math.max(n,1),fs=Math.max(7,Math.min(11,slot/5.6)),fs1=Math.max(7,Math.min(11,slot/3.2)),stag=slot<fs*5.6+2,B=stag?58:44;
   if(!n)return <div className="mu" style={{aspectRatio:"720 / 340",display:"grid",placeItems:"center",border:"1px dashed var(--ln)",borderRadius:8}}>{empty}</div>;
@@ -43,8 +73,13 @@ function Chart({data,line,empty,onPick}){
   </svg>;
 }
 
+/** Formatuje znacznik czasu jako lokalną datę i godzinę (pl-PL). */
 const TS=s=>new Date(s).toLocaleString("pl-PL",{day:"numeric",month:"numeric",hour:"2-digit",minute:"2-digit"});
 
+/**
+ * Linijka z kursami Superbet dla meczu: spread, moneyline i total z pierwszym pomiarem (otwarcie) oraz
+ * informacją o rynkach zamkniętych lub wstrzymanych.
+ */
 function GameOdds({gl,gh}){
   if(!gl)return null;
   const sg=n=>n>0?`+${n}`:`${n}`,parts=[];
@@ -56,6 +91,7 @@ function GameOdds({gl,gh}){
   return parts.length?<div className="mu">Superbet: {parts.join(" · ")}</div>:null;
 }
 
+/** Rozwijana tabela ruchu linii zawodnika od otwarcia rynku (czas, linia, kursy Over/Under). */
 function Moves({hs,td}){
   if(!hs||hs.length<2)return null;
   const f=hs[0],l=hs[hs.length-1],d=l[1]-f[1];
@@ -64,6 +100,10 @@ function Moves({hs,td}){
     <div style={{maxHeight:260,overflowY:"auto"}}><Plain head={td?["Czas","Kurs"]:["Czas","Linia","Over","Under"]} rows={hs.map(r=>[TS(r[0]),...r.slice(1)])}/></div></details>;
 }
 
+/**
+ * Podsumowanie linii Superbet dla zawodnika: linia, kursy i szansa Over bez marży (dla anytime TD sam kurs), z
+ * historią ruchu linii.
+ */
 function OddsChip({o,hs}){
   const b=v=><b style={{color:"var(--tx)"}}>{v}</b>;
   if(o.yes!=null)return <><p className="mu" style={{margin:"8px 0"}}>Superbet: anytime TD {b(o.yes)}{o.closed&&" · linia zamykająca / wstrzymana"}</p><Moves hs={hs} td/></>;
@@ -71,6 +111,10 @@ function OddsChip({o,hs}){
   return <><p className="mu" style={{margin:"8px 0"}}>Superbet: linia {b(o.line)} · Over {b(o.over)} · Under {b(o.under)} · szansa Over bez marży {b(`${(x/(x+y)*100).toFixed(1)}%`)}{o.closed&&" · linia zamykająca / wstrzymana"}</p><Moves hs={hs}/></>;
 }
 
+/**
+ * Filtry kontekstu meczu: miejsce, rola (faworyt/underdog), total, dach i pogoda, odpoczynek, rywal dywizyjny,
+ * nawierzchnia, pora meczu.
+ */
 const CTX=[
   ["place","Miejsce",[["home","Dom"],["away","Wyjazd"]]],
   ["role","Rola",[["fav","Faworyt"],["dog","Underdog"]]],
@@ -80,7 +124,12 @@ const CTX=[
   ["div","Rywal",[["div","Dywizyjny"],["non","Spoza dywizji"]]],
   ["surf","Nawierzchnia",[["grass","Trawa"],["turf","Sztuczna"]]],
   ["prime","Pora meczu",[["prime","Prime time (od 19:00 ET)"],["day","Pozostałe mecze"]]]];
+/** Wartości dachu oznaczające mecz na zewnątrz. */
 const OUTD=["outdoors","open"];
+/**
+ * Czy mecz r (wiersz logu) spełnia wszystkie ustawione filtry kontekstu c; mecze bez danych dla ustawionego
+ * filtra odpadają.
+ */
 const ctxOk=(r,c)=>
   (!c.place||(c.place==="home"?r.home===true:r.home===false))&&
   (!c.role||(r.sp==null?false:c.role==="fav"?r.sp>0:r.sp<0))&&
@@ -91,6 +140,10 @@ const ctxOk=(r,c)=>
   (!c.surf||(r.surf==null?false:r.surf===c.surf))&&
   (!c.prime||(r.prime==null?false:c.prime==="prime"?r.prime===1:r.prime===0));
 
+/**
+ * Pasek filtrów kontekstu z przyciskami „Dopasuj do meczu” (ustawia filtry według nadchodzącego meczu) i
+ * „Wyczyść”.
+ */
 function ContextFilter({ctx,setCtx,onMatch}){
   const on=Object.values(ctx).some(Boolean);
   return <div className="chips" style={{marginTop:6}}>
@@ -101,6 +154,7 @@ function ContextFilter({ctx,setCtx,onMatch}){
     {on&&<button className="chip" onClick={()=>setCtx({})}>Wyczyść ×</button>}</div>;
 }
 
+/** Filtr składu: wybór kolegi z drużyny i tryb „Z nim” lub „Bez niego”; aktywne filtry są chipami do usunięcia. */
 function RosterFilter({mates,flt,setFlt}){
   const [id,setId]=useState("");
   const add=mode=>{const m=mates.find(x=>x.id===id);if(m)setFlt([...flt.filter(f=>f.id!==id),{...m,mode}])};
@@ -113,6 +167,10 @@ function RosterFilter({mates,flt,setFlt}){
     {flt.map(f=><button key={f.id} className="chip" aria-pressed="true" title="Usuń filtr" onClick={()=>setFlt(flt.filter(x=>x.id!==f.id))}>{f.mode==="with"?"z":"bez"} {f.name} ×</button>)}</div>;
 }
 
+/**
+ * Okienko z uproszczonym box score'em meczu (podania, biegi, odbiory obu drużyn; sekcje wyrównane w
+ * wierszach). Zawodnik z karty jest wyróżniony, zamyka Esc, krzyżyk lub kliknięcie w tło.
+ */
 function BoxScore({gid,pid,onClose}){
   const [b,setB]=useState(undefined);
   useEffect(()=>{get(`/data/box/${gid}.json`).then(setB).catch(()=>setB(null))},[gid]);
@@ -140,6 +198,10 @@ function BoxScore({gid,pid,onClose}){
   </div></div>;
 }
 
+/**
+ * Blok „Wyniki w meczach”: zakładki statystyk, filtry składu i kontekstu, linia Superbet, wykres, kafelki
+ * trafności Over dla zakresów (sezony, H2H, L5, L10, własny) i okienko box score po kliknięciu słupka.
+ */
 function ChartBlock({p,log,g,opp,odds,hist,mates}){
   const tabs=TABS[p.pos]||TABS.WR;
   const [k,setK]=useState(tabs[0][0]),[rg,setRg]=useState("cur"),[line,setLine]=useState("");
@@ -193,8 +255,13 @@ function ChartBlock({p,log,g,opp,odds,hist,mates}){
   </section>;
 }
 
+/** Nazwa krycia w formacie „Cover 1”: spacje zamiast podkreślników, tylko pierwsza litera wielka. */
 const cname=k=>{const s=k.replace(/_/g," ").toLowerCase();return s.charAt(0).toUpperCase()+s.slice(1)};
 
+/**
+ * Blok krycia na danych FTN z poprzedniego sezonu (dla QB i zawodników bez danych Gridiris): przełącznik
+ * Man/Zone oraz Top 4 krycia obrony rywala.
+ */
 function CoverageBlock({p,opp,cov,pc}){
   const [mode,setMode]=useState("mz");
   if(!cov)return <section className="card"><h2>Krycia obrony</h2><p className="mu">Brak danych o coverage (FTN publikuje je po zakończeniu sezonu).</p></section>;
@@ -213,6 +280,10 @@ function CoverageBlock({p,opp,cov,pc}){
     <p className="mu" style={{fontSize:12}}>Dane FTN o rodzajach krycia pojawiają się dopiero po zakończeniu sezonu, więc to ostatni pełny sezon. Dane z bieżącego sezonu są w bloku „Strefy targetów".</p></section>;
 }
 
+/**
+ * Red zone i linia bramkowa: targety, biegi i okazje zawodnika (oraz jego udział w drużynie) w strefach do
+ * 20/10/5 jardów, TD, okna Sezon/L5/L3 i skuteczność obrony rywala z rankingiem.
+ */
 function RedZoneBlock({p,opp,rz,usage}){
   const [win,setWin]=useState(0);
   if(!rz)return <section className="card"><h2>Red zone</h2><p className="mu">Brak danych o red zone. Uruchom ponownie skrypt danych.</p></section>;
@@ -236,13 +307,20 @@ function RedZoneBlock({p,opp,rz,usage}){
     <p className="mu" style={{fontSize:12}}>Okno L liczone w ostatnich meczach drużyny. Ranking: 1 = najlepsza obrona (najmniej TD na akcję); kolory jak przy ścieżkach. Udziały liczone od targetów i biegów drużyny w tej strefie; bez klęknięć, spike’ów i prób na 2 punkty.</p></section>;
 }
 
+/** Ustawienia przed snapem (alignment) z Gridiris: [klucz, etykieta]. */
 const AL=[["slot","Slot"],["wide","Wide"],["tight","Tight (inline)"],["backfield","Backfield"]];
+/** Etykieta krycia z Gridiris (ZONE -> Zone, MAN -> Man). */
 const gname=k=>k==="ZONE"?"Zone":k==="MAN"?"Man":k;
 
+/** Adnotacja o źródle i próbce danych Gridiris (sezon, liczba meczów, mecze zawodnika). */
 function GiMeta({gd,gp}){
   return <p className="mu" style={{fontSize:12,margin:"0 0 8px"}}>Gridiris (dane NFL Next Gen Stats): sezon {gd.meta.season}, {gd.meta.games} meczów (do tygodnia {gd.meta.through_week}); zawodnik w {gp.games} z nich.</p>;
 }
 
+/**
+ * Alignment zawodnika (Gridiris): % snapów w slocie, wide, tight i backfield, trasy, targety, jardy, ranking
+ * obrony rywala w danym ustawieniu, udział w trasach drużyny i podział na stronę boiska.
+ */
 function AlignmentBlock({p,opp,gd,gp}){
   if(!gd||!gp)return <section className="card"><h2>Alignment</h2><p className="mu">Brak danych Gridiris dla tego zawodnika. Zaimportuj mecze skryptem ingest/gridiris_import.py, zacommituj pliki z ingest/gridiris i uruchom odświeżenie danych.</p></section>;
   const d=gd.teams?.[opp]?.al||{},tot=gp.snaps||0,tt=Object.values(gp.al).reduce((s,c)=>s+c.t,0);
@@ -259,6 +337,10 @@ function AlignmentBlock({p,opp,gd,gp}){
     <p className="mu" style={{fontSize:12}}>Ranking: 1 = najlepsza obrona (najmniej oddanych jardów na trasę, min. 15 tras, liczony gdy próbkę ma co najmniej 8 obron); kolory jak przy ścieżkach. Tight oznacza ustawienie w linii (inline), także dla zawodników innych pozycji.</p></section>;
 }
 
+/**
+ * Krycia na bieżących danych Gridiris: wyniki zawodnika wobec Man/Zone albo Top 4 krycia obrony rywala wraz z
+ * procentem ich użycia.
+ */
 function CoverageGI({p,opp,gd,gp}){
   const [mode,setMode]=useState("mz");
   const d=gd.teams?.[opp],use=k=>d?.usage?.[k],byUse=ks=>[...ks].sort((x,y)=>(use(y)??-1)-(use(x)??-1));
@@ -274,6 +356,10 @@ function CoverageGI({p,opp,gd,gp}){
     <p className="mu" style={{fontSize:12}}>Rodzaj krycia jest szacowany przez Gridiris (est.); część podań jest oznaczona jako niejasna lub niesklasyfikowana i nie wchodzi do powyższych kategorii. Man = Cover 0/1 i 2-Man, Zone = Cover 2/3/4/6.</p></section>;
 }
 
+/**
+ * Ścieżki zawodnika (Gridiris): udział każdej ścieżki w jego trasach, targety, przyjęcia, jardy i ranking
+ * obrony rywala wobec tej ścieżki.
+ */
 function RoutesGI({p,opp,gd,gp}){
   const d=gd.teams?.[opp]?.rt||{},tot=Object.values(gp.rt).reduce((s,c)=>s+c.r,0);
   const rows=Object.entries(gp.rt).sort((a,b)=>b[1].r-a[1].r).map(([k,c])=>{const x=d[k];
@@ -284,8 +370,14 @@ function RoutesGI({p,opp,gd,gp}){
     <p className="mu" style={{fontSize:12}}>Trasy to wszystkie ścieżki zawodnika w podaniach (nie tylko targety). Ranking: 1 = najlepsza obrona (najmniej jardów na trasę; min. 15 tras); kolory jak wcześniej.</p></section>;
 }
 
+/** Kolor tła komórki zależny od rankingu obrony (czerwony do 10. miejsca, pomarańczowy do 22., dalej zielony). */
 const tint=r=>r==null?null:`color-mix(in srgb, ${r<=10?"var(--bad)":r<=22?"var(--warn)":"var(--ac)"} 38%, var(--card2))`;
 
+/**
+ * Podstrona meczu: dwa boxy z alignmentem obron (gdzie przeciekają) i lista zawodników obu drużyn z odsetkiem
+ * snapów w każdym ustawieniu, kolorowanym rankingiem obrony rywala; filtr drużyn, kliknięcie nazwiska otwiera
+ * kartę zawodnika.
+ */
 function MatchupPage({g,gd,gt,onBack,pick}){
   const [only,setOnly]=useState("");
   const ts=[g.away_team,g.home_team],opp=t=>t===g.away_team?g.home_team:g.away_team;
@@ -303,7 +395,7 @@ function MatchupPage({g,gd,gt,onBack,pick}){
         return <span title={c?`${c.n} snapów, ${c.t} targetów`:"brak"} style={{display:"inline-block",minWidth:56,padding:"2px 8px",borderRadius:6,background:share>=5?tint(r):"transparent",opacity:share>=5?1:.45}}>{c?pc1(share):"–"}</span>}),x.t]});
   return <>
     <button className="back" onClick={onBack}>← Wróć</button>
-    <h1>{g.away_team} @ {g.home_team} <span className="mu" style={{fontSize:18}}>alignment</span></h1>
+    <h1>{g.away_team} @ {g.home_team} <span className="mu" style={{fontSize:18}}>alignment: gdzie obrona przecieka</span></h1>
     <div className="grid">{ts.map(box)}</div>
     <section className="card"><h2>Zawodnicy i ich ustawienia <small>kolor komórki = ranking obrony rywala w danym ustawieniu (zielony: przecieka)</small></h2>
       <div className="chips"><button className="chip" aria-pressed={only===""} onClick={()=>setOnly("")}>Obie drużyny</button>
@@ -313,6 +405,10 @@ function MatchupPage({g,gd,gt,onBack,pick}){
   </>;
 }
 
+/**
+ * Blok „Inni zawodnicy”: średnie oddawane pozycji przez obronę rywala i pojedyncze wyniki zawodników tej
+ * pozycji (data, drużyna, pozycja w depth chartcie z dnia meczu).
+ */
 function OthersBlock({p,opp,def,rank}){
   const cols=MAIN[p.pos],others=def?def.recent.filter(r=>r.position===p.pos&&r.player_display_name!==p.name):[];
   const al=def?.allowed?.[p.pos];
@@ -325,18 +421,31 @@ function OthersBlock({p,opp,def,rank}){
         [<b>Średnia ({others.length})</b>,"","","",...cols.map(c=><b>{avg(others,c)}</b>)]]}/>:<p className="mu">Brak danych.</p>}</>}</section>;
 }
 
+/**
+ * Kolorowa plakietka z rankingiem obrony (1 = najlepsza obrona): czerwona do 10. miejsca, pomarańczowa do 22.,
+ * dalej zielona.
+ */
 function Rank({r}){
   const c=r<=10?"var(--bad)":r<=22?"var(--warn)":"var(--ac)";
   return <span style={{display:"inline-block",minWidth:30,textAlign:"center",padding:"1px 9px",borderRadius:999,fontWeight:700,color:c,
     background:`color-mix(in srgb, ${c} 18%, transparent)`}}>{r}</span>;
 }
 
+/** Nazwy stref głębokości i stron boiska w mapie stref targetów. */
 const ZD={behind:"Za linią",short:"Krótkie 0–9",mid:"Średnie 10–19",deep:"Głębokie 20+"},ZS={left:"lewa",middle:"środek",right:"prawa"};
+/** Kolejność 12 stref (głębokość x strona boiska) używana przy podsumowaniach i dla QB. */
 const ZORDER=Object.keys(ZD).flatMap(d=>["left","middle","right"].map(s=>`${d}:${s}`));
+/** Etykieta strefy, np. „Krótkie 0–9 · lewa”. */
 const zname=z=>{const [d,s]=z.split(":");return `${ZD[d]} · ${ZS[s]||s}`};
 
+/** Układ mapy boiska: wysokości rzędów (od najgłębszego do strefy za linią) i szerokości kolumn. */
 const ZROWS=[["deep",150],["mid",120],["short",120],["behind",80]],ZCOLS=[["left",.34],["middle",.32],["right",.34]];
 
+/**
+ * Mapa boiska ze strefami targetów (bieżący sezon): kolor to ranking obrony rywala w strefie, w środku %
+ * targetów zawodnika (dla QB % podań przeciwko obronie), linia wznowienia, legenda i częstotliwość blitzu
+ * obrony.
+ */
 function ZonesBlock({p,opp,ins,pz}){
   if(!ins)return <section className="card"><h2>Strefy targetów</h2><p className="mu">Brak danych bieżącego sezonu. Uruchom ponownie skrypt danych.</p></section>;
   const d=ins.teams?.[opp],bl=d?.blitz,qb=p.pos==="QB",mine=pz?.zones||{};
@@ -369,6 +478,7 @@ function ZonesBlock({p,opp,ins,pz}){
       Kolor i numer #: ranking obrony {opp} w strefie (1 = najlepsza, wg EPA na target). Atak w górę; strefa = głębokość podania (air yards) × strona boiska, z play-by-play bieżącego sezonu. To przybliżenie ścieżek, a nie ich nazwy.{!qb&&!tot?" Zawodnik nie ma jeszcze targetów w bieżącym sezonie.":""}</p></section>;
 }
 
+/** Ścieżki zawodnika na danych FTN z poprzedniego sezonu (używane, gdy brak danych Gridiris). */
 function RoutesBlock({p,opp,cov,pc}){
   const d=cov?.teams?.[opp],routes=Object.entries(pc?.routes||{}).sort((a,b)=>b[1].targets-a[1].targets);
   return <section className="card"><h2>Ścieżki zawodnika i obrona {opp} <small>ścieżki przy targetach · dane FTN z sezonu {cov?.meta?.def_season??"–"}</small></h2>
@@ -379,6 +489,10 @@ function RoutesBlock({p,opp,cov,pc}){
     <p className="mu" style={{fontSize:12}}>Ranking: 1 = najlepsza obrona przeciw tej ścieżce (najniższe EPA na target). Kolory matchupu: zielony – dobry (miejsca 23–32), pomarańczowy – średni (11–22), czerwony – zły (1–10). Dane FTN obejmują ścieżkę głównego odbiorcy na akcji.</p></section>;
 }
 
+/**
+ * Tabela usage zawodników drużyny: zakładki Receiving/Rushing, okna Sezon/L5/L3/L1 liczone w meczach drużyny,
+ * udział z paskiem, pozycja w depth chartcie i status.
+ */
 function Usage({usage,teams,depth,pick}){
   const [tab,setTab]=useState("rec"),[win,setWin]=useState(0);
   const i=tab==="rec"?0:1;
@@ -400,6 +514,7 @@ function Usage({usage,teams,depth,pick}){
     <p className="mu" style={{fontSize:12}}>Okno L liczone w ostatnich meczach drużyny; „na mecz" to średnia na mecz drużyny w oknie.</p></section>;
 }
 
+/** Koledzy z drużyny zawodnika (z usage i depth chartu, bez niego samego) do filtra składu. */
 function matesOf(p,usage,depth){
   const m=new Map();
   (usage?.[p.team]?.players||[]).forEach(x=>m.set(x.player_id,{id:x.player_id,name:x.name,pos:x.pos}));
@@ -408,25 +523,47 @@ function matesOf(p,usage,depth){
   return [...m.values()].filter(x=>!String(x.id).startsWith("espn_")).sort((a,b)=>POS.indexOf(a.pos)-POS.indexOf(b.pos)||a.name.localeCompare(b.name));
 }
 
+/**
+ * Główny komponent: ładuje dane, trzyma wybór meczu i zawodnika i przełącza widoki: ekran główny (wybór meczu
+ * i depth charty), karta zawodnika (dwie kolumny bloków) oraz podstrona meczu z alignmentem.
+ */
 export default function App(){
+  /**
+   * Stan aplikacji: terminarz, depth charty, wybrany mecz i zawodnik, logi, dane obrony, krycia, strefy,
+   * kursy, red zone, Gridiris i bieżący widok.
+   */
   const [games,setGames]=useState(null),[depth,setDepth]=useState({}),[g,setG]=useState(null),[p,setP]=useState(null),[log,setLog]=useState([]),
     [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null),[gt,setGt]=useState(null),[view,setView]=useState("");
+  /**
+   * Jednorazowe wczytanie wspólnych plików danych (terminarz, depth charty, usage, krycia, kursy, historia
+   * linii, red zone, Gridiris).
+   */
   useEffect(()=>{get("/data/schedule.json").then(s=>{setGames(s);setG(s[0]||null)}).catch(()=>setGames([]));
     get("/data/depth.json").then(setDepth).catch(()=>{});get("/data/usage.json").then(setUsage).catch(()=>{});
     get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/gridiris/teams.json").then(setGt).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
+  /** Rywal zawodnika w wybranym meczu; pusty, gdy jego drużyna w nim nie gra. */
   const opp=p&&g?(p.team===g.home_team?g.away_team:p.team===g.away_team?g.home_team:""):"";
+  /** Po wyborze zawodnika wczytuje jego log meczów, krycia FTN, strefy i dane Gridiris. */
   useEffect(()=>{setLog([]);setPc(null);setPz(null);setGp(null);if(!p)return;
     get(`/data/logs/${p.player_id}.json`).then(setLog).catch(()=>{});get(`/data/coverage/players/${p.player_id}.json`).then(setPc).catch(()=>{});get(`/data/inseason/players/${p.player_id}.json`).then(setPz).catch(()=>{});get(`/data/gridiris/players/${p.player_id}.json`).then(setGp).catch(()=>{})},[p]);
+  /** Wczytuje dane obrony rywala (ostatnie mecze) po zmianie rywala. */
   useEffect(()=>{if(opp)get(`/data/defense/${opp}.json`).then(setDef).catch(()=>setDef(null));else setDef(null)},[opp]);
+  /**
+   * Pozycja zawodnika w depth chartcie jako tekst (np. WR2): z dnia meczu, a gdy jej brak, z obecnego depth
+   * chartu.
+   */
   const rank=r=>{if(r.depth_rank)return `${r.position}${r.depth_rank}`;
     for(const t of [r.team,...Object.keys(depth)]){const l=depth[t]?.[r.position]||[],i=l.findIndex(x=>x.player_id===r.player_id);
       if(i>=0)return `${r.position}${i+1}`}return "–"};
+  /** Otwiera kartę zawodnika, ustawia mecz jego drużyny i przewija stronę na górę. */
   const pick=(x,team,l)=>{setP({player_id:x.player_id,name:x.name,pos:x.pos,team,status:l.s,injury:l.inj});
     const gm=(games||[]).find(m=>m.home_team===team||m.away_team===team);if(gm)setG(gm);setView("");window.scrollTo(0,0)};
+  /** Karta depth chartu drużyny z klikalnymi zawodnikami, rangami i statusami. */
   const Depth=({team})=><section className="card"><h2>{team} <small>depth chart</small></h2>{POS.map(pos=><div key={pos} style={{marginBottom:8}}><span className="mu">{pos}</span>
     <div className="chips">{(depth[team]?.[pos]||[]).map((x,i)=><button key={x.player_id} className="chip" onClick={()=>pick({...x,pos},team,{s:x.status,inj:x.injury})}>
       <span className="mu">{pos}{i+1}</span> {x.name}<Badge s={x.status} inj={x.injury}/>{x.usage!=null&&<span className="mu"> {x.usage}</span>}</button>)}</div></div>)}</section>;
   if(!games)return <main><p className="mu">Ładowanie…</p></main>;
+  /** Stopka ze źródłami danych, licencją i uwagą o ryzyku. */
   const footer=<footer className="mu" style={{marginTop:32,paddingTop:12,borderTop:"1px solid var(--ln)",fontSize:12}}>
     Źródła danych: statystyki, terminarze i składy – nflverse; dane o rodzajach krycia (coverage) i ścieżkach – FTN Data via nflverse, na licencji{" "}
     <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer" style={{color:"var(--ac)"}}>CC BY-SA 4.0</a>; alignment, ścieżki i krycie (est.) z bieżącego sezonu – Gridiris (dane NFL Next Gen Stats); depth charty i statusy kontuzji – ESPN.
@@ -437,7 +574,7 @@ export default function App(){
     <h1>{p.name}<Badge s={p.status} inj={p.injury}/></h1>
     <div className="mu">{p.pos} · {p.team} vs {opp||"–"} · {D(g.gameday,2)}</div>
     <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game}/>
-    <div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment</button></div>
+    <div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment meczu: gdzie obrona przecieka →</button></div>
     <div className="cols">
       <div className="col">
         <div style={{order:1}}><ChartBlock key={p.player_id} p={p} log={log} g={g} opp={opp} odds={odds} hist={hist} mates={matesOf(p,usage,depth)}/></div>
@@ -456,6 +593,6 @@ export default function App(){
   return <main><h1>NFL Edge</h1><p className="mu">Wybierz mecz, a potem zawodnika z depth chartu.</p>
     {!games.length&&<p className="mu">Brak nadchodzących meczów w terminarzu.</p>}
     <div className="chips">{games.map(x=><button key={x.game_id} className="chip" aria-pressed={g?.game_id===x.game_id} onClick={()=>setG(x)}>{x.away_team} @ {x.home_team} <span className="mu">{D(x.gameday,2)}</span></button>)}</div>
-    {g&&<div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment</button></div>}
+    {g&&<div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment meczu: gdzie obrona przecieka →</button></div>}
     {g&&<div className="grid"><Depth team={g.away_team}/><Depth team={g.home_team}/></div>}{footer}</main>;
 }
