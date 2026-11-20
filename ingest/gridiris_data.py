@@ -1,7 +1,8 @@
 """Agregacja zaimportowanych meczów Gridiris (ingest/gridiris/*.json) do plików dla aplikacji.
 
 Wejście:  ingest/gridiris/<sezon>_<tydzień>_<wyjazd>_<dom>.json (tworzy je gridiris_import.py).
-Wyjście:  web/public/data/gridiris/defense.json            - obrony: użycie krycia (est.), oddane jardy wg alignment i ścieżek + rankingi
+Wyjście:  web/public/data/gridiris/defenders.json        - obrońcy: kogo kryją, wyniki i separacja (CB kontra WR)
+          web/public/data/gridiris/defense.json            - obrony: użycie krycia (est.), oddane jardy wg alignment i ścieżek + rankingi
           web/public/data/gridiris/players/<gsis_id>.json  - zawodnicy: alignment, ścieżki, wyniki wg krycia, udział w trasach
 Liczone jest tylko najnowszy sezon z zaimportowanych plików (od początku sezonu do ostatniego zaimportowanego meczu).
 Skróty: n = snapy w podaniach, r = ścieżki (bez bloków), t = targety, rec = przyjęcia, yds = jardy, td = przyłożenia,
@@ -31,11 +32,11 @@ def split_name(name):
 
 
 def load_roster(season):
-    """Składy tygodniowe nflverse: (drużyna, tydzień, numer) -> (gsis_id, pełne nazwisko). Przy braku danych zwraca pusty słownik."""
+    """Składy tygodniowe nflverse: (drużyna, tydzień, numer) -> (gsis_id, pełne nazwisko, pozycja). Przy braku danych zwraca pusty słownik."""
     try:
         import nflreadpy as nfl
-        r = nfl.load_rosters_weekly([season]).select(["team", "week", "jersey_number", "gsis_id", "full_name"]).drop_nulls()
-        return {(x["team"], int(x["week"]), int(x["jersey_number"])): (x["gsis_id"], x["full_name"]) for x in r.to_dicts()}
+        r = nfl.load_rosters_weekly([season]).select(["team", "week", "jersey_number", "gsis_id", "full_name", "position"]).drop_nulls()
+        return {(x["team"], int(x["week"]), int(x["jersey_number"])): (x["gsis_id"], x["full_name"], x["position"]) for x in r.to_dicts()}
     except Exception as e:
         print("gridiris: brak składów tygodniowych, dopasowuję po nazwiskach:", e)
         return {}
@@ -66,10 +67,18 @@ class IdMap:
         self.cache[key] = res
         return res
 
+    def info(self, team, week, no, name):
+        """(player_id, pełne nazwisko, pozycja) obrońcy ze składu tygodniowego; (None, None, None), gdy nie da się dopasować."""
+        hit = self.roster.get((team, week, no))
+        ini, last = split_name(name)
+        if hit and norm(hit[1]).endswith(last) and hit[1][:1].lower() == ini:
+            return hit[0], hit[1], (hit[2] if len(hit) > 2 else None)
+        return None, None, None
+
 
 def cell():
-    """Pusta komórka statystyk."""
-    return {"n": 0, "r": 0, "t": 0, "rec": 0, "yds": 0, "td": 0, "so": 0.0, "no": 0}
+    """Pusta komórka statystyk (so/no: separacja na targetach, sa/na: separacja na wszystkich trasach)."""
+    return {"n": 0, "r": 0, "t": 0, "rec": 0, "yds": 0, "td": 0, "so": 0.0, "no": 0, "sa": 0.0, "na": 0}
 
 
 def bump(d, key, is_route, target, rec, yds, td, openv):
@@ -78,6 +87,9 @@ def bump(d, key, is_route, target, rec, yds, td, openv):
     c["n"] += 1
     if is_route:
         c["r"] += 1
+        if openv is not None:
+            c["sa"] += openv
+            c["na"] += 1
     if target:
         c["t"] += 1
         c["rec"] += rec
@@ -104,8 +116,8 @@ def rank_cells(teams, field):
 
 
 def aggregate(games, idmap):
-    """Główna agregacja: zwraca (dane_obron, dane_zawodników) dla listy meczów jednego sezonu."""
-    players, teams, gtp = {}, {}, {}
+    """Główna agregacja: zwraca (dane_obron, dane_zawodników, dane_obrońców) dla listy meczów jednego sezonu."""
+    players, teams, gtp, defenders = {}, {}, {}, {}
     for g in games:
         for p in g["plays"]:
             if "routes" not in p:
@@ -131,6 +143,14 @@ def aggregate(games, idmap):
                 rec = 1 if tgt and p.get("result") == "Complete" else 0
                 yds = (p.get("yds") or 0) if rec else 0
                 td = 1 if rec and p.get("td") else 0
+                if is_route and r["def_no"] is not None:  # kto kryje odbiorcę w momencie rzutu
+                    did, dname, dpos = idmap.info(dfn, g["week"], r["def_no"], r["def_name"])
+                    if did is None:
+                        ini, last = split_name(r["def_name"])
+                        did, dname = f"{dfn}:{ini}.{last}", r["def_name"]
+                    DD = defenders.setdefault(did, {"team": dfn, "name": dname, "pos": dpos, "games": set(), "al": {}})
+                    DD["games"].add(g["game_id"])
+                    bump(DD["al"], r["align"], is_route, tgt, rec, yds, td, r["open"])
                 pid = idmap.get(off, g["week"], r["no"], r["name"])
                 if tgt or is_route:
                     bump(D["al"], r["align"], is_route, tgt, rec, yds, td, r["open"])
@@ -154,7 +174,7 @@ def aggregate(games, idmap):
     for P in players.values():
         P["tp"] = sum(v for (gid, tm), v in gtp.items() if tm == P["team"] and gid in P["games"])  # podania drużyny w jego meczach
         P["games"] = len(P["games"])
-    return teams, players
+    return teams, players, defenders
 
 
 def build_gridiris(out: Path, in_dir: Path = None, players_json: Path = None):
@@ -168,7 +188,7 @@ def build_gridiris(out: Path, in_dir: Path = None, players_json: Path = None):
     games = [g for g in games if g["season"] == season]
     pj = players_json or out / "players.json"
     players = json.loads(pj.read_text(encoding="utf-8")) if pj.exists() else []
-    teams, pls = aggregate(games, IdMap(load_roster(season), players))
+    teams, pls, dfs = aggregate(games, IdMap(load_roster(season), players))
     gdir = out / "gridiris"
     (gdir / "players").mkdir(parents=True, exist_ok=True)
     for old in (gdir / "players").glob("*.json"):  # dane zawodników liczone od zera przy każdym budowaniu
@@ -190,9 +210,30 @@ def build_gridiris(out: Path, in_dir: Path = None, players_json: Path = None):
             continue
         tm.setdefault(P["team"], []).append({"id": pid, "name": names.get(pid) or P["name"], "pos": P["pos"], "g": P["games"], "n": P["snaps"],
                                              "r": P["routes"], "tp": P["tp"], "t": sum(c["t"] for c in P["al"].values()),
+                                             "sa": round(sum(c["sa"] for c in P["al"].values()), 1), "na": sum(c["na"] for c in P["al"].values()),
                                              "al": {k: {"n": c["n"], "t": c["t"]} for k, c in P["al"].items()}})
     for t in tm:
         tm[t].sort(key=lambda x: -x["r"])
     (gdir / "teams.json").write_text(json.dumps(tm, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    dout = {}  # obrońcy: kogo kryli i ile separacji zostawiali (do strony meczu: CB kontra WR)
+    for did, DD in dfs.items():
+        tot = cell()
+        for c in DD["al"].values():
+            for k in ("r", "t", "rec", "yds", "td", "sa", "na"):
+                tot[k] += c[k]
+        if tot["r"] < 5:
+            continue
+        dout.setdefault(DD["team"], []).append({
+            "id": did, "name": DD["name"], "pos": DD["pos"], "g": len(DD["games"]), "r": tot["r"], "t": tot["t"], "rec": tot["rec"],
+            "yds": tot["yds"], "td": tot["td"], "sa": round(tot["sa"], 1), "na": tot["na"],
+            "al": {k: {"r": c["r"], "t": c["t"], "rec": c["rec"], "yds": c["yds"], "sa": round(c["sa"], 1), "na": c["na"]}
+                   for k, c in DD["al"].items()}})
+    pool = sorted(((x["sa"] / x["na"], x) for lst in dout.values() for x in lst if x["r"] >= MIN_ROUTES and x["na"]), key=lambda t: t[0])
+    if len(pool) >= 20:  # percentyl separacji wśród obrońców: wyższy = zostawia więcej miejsca (słabszy obrońca)
+        for i, (_, x) in enumerate(pool):
+            x["sp"] = round(i / (len(pool) - 1) * 100)
+    for t in dout:
+        dout[t].sort(key=lambda x: -x["r"])
+    (gdir / "defenders.json").write_text(json.dumps(dout, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     print(f"gridiris {season}: {len(games)} meczów (tygodnie {weeks}), {len(defense)} obron, {len(pls)} zawodników")
     return meta
