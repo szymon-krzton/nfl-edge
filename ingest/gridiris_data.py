@@ -3,7 +3,7 @@
 Wejście:  ingest/gridiris/<sezon>_<tydzień>_<wyjazd>_<dom>.json (tworzy je gridiris_import.py).
 Wyjście:  web/public/data/gridiris/defenders.json        - obrońcy: kogo kryją, wyniki i separacja (CB kontra WR)
           web/public/data/gridiris/defense.json            - obrony: użycie krycia (est.), oddane jardy wg alignment i ścieżek + rankingi
-          web/public/data/gridiris/players/<gsis_id>.json  - zawodnicy: alignment, ścieżki, wyniki wg krycia, udział w trasach
+          web/public/data/gridiris/players/<gsis_id>.json  - zawodnicy: alignment, ścieżki, wyniki wg krycia, udział w trasach, obrońcy (cb)
 Liczone jest tylko najnowszy sezon z zaimportowanych plików (od początku sezonu do ostatniego zaimportowanego meczu).
 Skróty: n = snapy w podaniach, r = ścieżki (bez bloków), t = targety, rec = przyjęcia, yds = jardy, td = przyłożenia,
 so = suma separacji na targetach, no = liczba pomiarów separacji."""
@@ -143,6 +143,7 @@ def aggregate(games, idmap):
                 rec = 1 if tgt and p.get("result") == "Complete" else 0
                 yds = (p.get("yds") or 0) if rec else 0
                 td = 1 if rec and p.get("td") else 0
+                did = dname = dpos = None
                 if is_route and r["def_no"] is not None:  # kto kryje odbiorcę w momencie rzutu
                     did, dname, dpos = idmap.info(dfn, g["week"], r["def_no"], r["def_name"])
                     if did is None:
@@ -159,12 +160,15 @@ def aggregate(games, idmap):
                 if not pid:
                     continue
                 P = players.setdefault(pid, {"team": off, "pos": r["pos"], "name": r["name"], "games": set(), "al": {}, "side": {},
-                                             "rt": {}, "cv": {}, "snaps": 0, "routes": 0})
+                                             "rt": {}, "cv": {}, "snaps": 0, "routes": 0, "cb": {}, "cbm": {}})
                 P["games"].add(g["game_id"])
                 P["snaps"] += 1
                 P["routes"] += is_route
                 bump(P["al"], r["align"], is_route, tgt, rec, yds, td, r["open"])
                 bump(P["side"], r["side"], is_route, tgt, rec, yds, td, r["open"])
+                if did is not None:  # obrońcy, którzy kryli tego odbiorcę
+                    bump(P["cb"], did, is_route, tgt, rec, yds, td, r["open"])
+                    P["cbm"][did] = {"name": dname, "team": dfn, "pos": dpos}
                 if is_route:
                     bump(P["rt"], r["route"], is_route, tgt, rec, yds, td, r["open"])
                     for k in groups:
@@ -174,6 +178,9 @@ def aggregate(games, idmap):
     for P in players.values():
         P["tp"] = sum(v for (gid, tm), v in gtp.items() if tm == P["team"] and gid in P["games"])  # podania drużyny w jego meczach
         P["games"] = len(P["games"])
+        P["cb"] = sorted(({"id": d, **P["cbm"][d], "r": c["r"], "t": c["t"], "rec": c["rec"], "yds": c["yds"], "td": c["td"],
+                           "sa": round(c["sa"], 1), "na": c["na"]} for d, c in P["cb"].items()), key=lambda x: -x["r"])[:8]
+        del P["cbm"]
     return teams, players, defenders
 
 
