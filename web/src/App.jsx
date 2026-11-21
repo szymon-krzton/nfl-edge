@@ -429,6 +429,57 @@ function MatchupPage({g,gd,gt,gdf,onBack,pick}){
   </>;
 }
 
+/** Nazwy statystyk w rankingu value. */
+const VLAB={receiving_yards:"Rec yds",receptions:"Receptions",rushing_yards:"Rush yds",carries:"Carries",passing_yards:"Pass yds",passing_tds:"Pass TD",completions:"Completions",attempts:"Attempts",passing_interceptions:"INT",td:"Anytime TD"};
+/** Siła „priora” w szacowaniu szansy: tyle fikcyjnych meczów o trafności równej szansie z kursu dodajemy do historii (osłabia wpływ małych próbek). */
+const KPRIOR=6;
+
+/**
+ * Ocena jednego propsu na podstawie historii zawodnika w wybranym oknie (win: liczba meczów albo "s" = bieżący sezon).
+ * Szansa z kursu to kursy Over i Under bez marży (dla anytime TD: 1/kurs). Szacowana szansa = (trafienia + KPRIOR x szansa z kursu) / (mecze + KPRIOR).
+ * Zwraca stronę o większym EV (albo wymuszoną przez force), trafność, przewagę w punktach procentowych i EV w procentach; null przy zbyt małej próbce.
+ */
+function valueOf(pr,win,minN,force){
+  const v=win==="s"?(pr.cs?pr.v.slice(-pr.cs):[]):pr.v.slice(-win),n=v.length;
+  if(n<minN)return null;
+  if(pr.yes!=null){const imp=1/pr.yes,h=v.filter(x=>x>0).length,pe=(h+KPRIOR*imp)/(n+KPRIOR);return {side:"TD",odds:pr.yes,imp,h,n,pe,edge:(pe-imp)*100,ev:(pe*pr.yes-1)*100}}
+  const a=1/pr.over,b=1/pr.under,io=a/(a+b),iu=b/(a+b),ho=v.filter(x=>x>pr.line).length,hu=v.filter(x=>x<pr.line).length;
+  const po=(ho+KPRIOR*io)/(n+KPRIOR),pu=(hu+KPRIOR*iu)/(n+KPRIOR);
+  const o={side:"Over",odds:pr.over,imp:io,h:ho,n,pe:po,edge:(po-io)*100,ev:(po*pr.over-1)*100},u={side:"Under",odds:pr.under,imp:iu,h:hu,n,pe:pu,edge:(pu-iu)*100,ev:(pu*pr.under-1)*100};
+  return force==="Over"?o:force==="Under"?u:(o.ev>=u.ev?o:u);
+}
+
+/**
+ * Ranking value dla całej kolejki: propsy Superbet, w których historyczna trafność zawodnika odbiega od szansy z kursu.
+ * Filtry: okno (L5/L10/L20/sezon), minimalna próbka, statystyka, mecz, strona i „tylko EV dodatnie”. Nazwisko otwiera kartę zawodnika.
+ */
+function ValuePage({vl,games,onBack,pick}){
+  const [win,setWin]=useState(10),[minN,setMinN]=useState(5),[stat,setStat]=useState(""),[gid,setGid]=useState(""),[side,setSide]=useState(""),[pos,setPos]=useState(true);
+  if(!vl||!vl.props?.length)return <><button className="back" onClick={onBack}>← Wróć</button><h1>Ranking value</h1><p className="mu">Brak danych. Ranking powstaje z kursów Superbet i logów zawodników po odświeżeniu danych (build_data.py i odds_data.py).</p></>;
+  const stats=[...new Set(vl.props.map(x=>x.stat))],gids=[...new Set(vl.props.map(x=>x.gid))];
+  const glabel=id=>{const m=(games||[]).find(x=>x.game_id===id);return m?`${m.away_team} @ ${m.home_team}`:id};
+  const rows=vl.props.filter(x=>(!stat||x.stat===stat)&&(!gid||x.gid===gid)).map(x=>({x,r:valueOf(x,win,minN,side==="Over"||side==="Under"?side:undefined)}))
+    .filter(o=>o.r&&(!side||o.r.side===side)&&(!pos||o.r.ev>0)).sort((a,b)=>b.r.ev-a.r.ev).slice(0,100);
+  const colr=n=><b style={{color:n>0?"var(--ac)":"var(--bad)"}}>{n>0?"+":""}{n.toFixed(1)}</b>;
+  return <>
+    <button className="back" onClick={onBack}>← Wróć</button>
+    <h1>Ranking value <span className="mu" style={{fontSize:18}}>propsy Superbet kontra historia</span></h1>
+    <section className="card"><h2>Filtry <small>aktualizacja {TS(vl.meta.updated)}, {vl.meta.n} propsów</small></h2>
+      <div className="chips"><span className="mu">Okno:</span>{[[5,"L5"],[10,"L10"],[20,"L20"],["s","Sezon"]].map(([k,n])=><button key={n} className="chip" aria-pressed={win===k} onClick={()=>setWin(k)}>{n}</button>)}
+        <span className="mu" style={{marginLeft:10}}>Strona:</span>{[["","Wszystkie"],["Over","Over"],["Under","Under"],["TD","Anytime TD"]].map(([k,n])=><button key={n} className="chip" aria-pressed={side===k} onClick={()=>setSide(k)}>{n}</button>)}
+        <button className="chip" aria-pressed={pos} onClick={()=>setPos(!pos)} style={{marginLeft:10}}>Tylko EV dodatnie</button></div>
+      <div className="chips"><label className="mu">Min. próbka <select value={minN} onChange={e=>setMinN(+e.target.value)}>{[3,5,8,10].map(n=><option key={n} value={n}>{n} meczów</option>)}</select></label>
+        <select value={stat} onChange={e=>setStat(e.target.value)} aria-label="Statystyka"><option value="">Statystyka: wszystkie</option>{stats.map(s=><option key={s} value={s}>{VLAB[s]||s}</option>)}</select>
+        <select value={gid} onChange={e=>setGid(e.target.value)} aria-label="Mecz"><option value="">Mecz: wszystkie</option>{gids.map(id=><option key={id} value={id}>{glabel(id)}</option>)}</select></div></section>
+    <section className="card"><h2>Propsy według przewagi <small>{rows.length} z {vl.props.length}</small></h2>
+      {rows.length?<Plain head={["Zawodnik","Mecz","Statystyka","Linia","Strona","Kurs","Szansa z kursu","Trafność","Szac. szansa","Przewaga (pp)","EV %"]} rows={rows.map(({x,r})=>[
+        <button className="link" onClick={()=>pick({player_id:x.id,name:x.name,pos:x.pos},x.team,{s:"",inj:""})}>{x.name}</button>,
+        `${x.team} vs ${x.opp}`,VLAB[x.stat]||x.stat,x.line!=null?<>{x.line}{x.l0!=null&&x.l0!==x.line&&<span className="mu"> (otw. {x.l0})</span>}</>:"–",r.side,r.odds,
+        pc1(r.imp*100),`${r.h}/${r.n} (${Math.round(r.h/r.n*100)}%)`,pc1(r.pe*100),colr(r.edge),colr(r.ev)])}/>:<p className="mu">Brak propsów spełniających filtry. Zmniejsz minimalną próbkę albo wyłącz „Tylko EV dodatnie”.</p>}
+      <p className="mu" style={{fontSize:12}}>Metoda: szansa z kursu to kursy Over i Under bez marży (dla anytime TD 1/kurs, więc z marżą). Trafność to odsetek meczów w oknie ponad linią (Over) albo poniżej (Under); dla TD mecze z przynajmniej jednym TD. Szacowana szansa łączy trafność z szansą z kursu (6 fikcyjnych meczów), żeby małe próbki nie zawyżały wyniku. EV = szac. szansa x kurs − 1. To prosty model oparty tylko na historii wyników: nie uwzględnia rywala, składu, pogody ani tego, że linia bukmachera zawiera już te informacje. Duże wartości przy małych próbkach traktuj ostrożnie, a to nie jest rekomendacja zakładu.</p></section>
+  </>;
+}
+
 /**
  * Blok „Inni zawodnicy”: średnie oddawane pozycji przez obronę rywala i pojedyncze wyniki zawodników tej
  * pozycji (data, drużyna, pozycja w depth chartcie z dnia meczu).
@@ -557,14 +608,14 @@ export default function App(){
    * kursy, red zone, Gridiris i bieżący widok.
    */
   const [games,setGames]=useState(null),[depth,setDepth]=useState({}),[g,setG]=useState(null),[p,setP]=useState(null),[log,setLog]=useState([]),
-    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null),[gt,setGt]=useState(null),[gdf,setGdf]=useState(null),[view,setView]=useState("");
+    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null),[gt,setGt]=useState(null),[gdf,setGdf]=useState(null),[vl,setVl]=useState(null),[view,setView]=useState("");
   /**
    * Jednorazowe wczytanie wspólnych plików danych (terminarz, depth charty, usage, krycia, kursy, historia
    * linii, red zone, Gridiris).
    */
   useEffect(()=>{get("/data/schedule.json").then(s=>{setGames(s);setG(s[0]||null)}).catch(()=>setGames([]));
     get("/data/depth.json").then(setDepth).catch(()=>{});get("/data/usage.json").then(setUsage).catch(()=>{});
-    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/gridiris/teams.json").then(setGt).catch(()=>{});get("/data/gridiris/defenders.json").then(setGdf).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
+    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/gridiris/teams.json").then(setGt).catch(()=>{});get("/data/gridiris/defenders.json").then(setGdf).catch(()=>{});get("/data/value.json").then(setVl).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
   /** Rywal zawodnika w wybranym meczu; pusty, gdy jego drużyna w nim nie gra. */
   const opp=p&&g?(p.team===g.home_team?g.away_team:p.team===g.away_team?g.home_team:""):"";
   /** Po wyborze zawodnika wczytuje jego log meczów, krycia FTN, strefy i dane Gridiris. */
@@ -592,6 +643,7 @@ export default function App(){
     Źródła danych: statystyki, terminarze i składy – nflverse; dane o rodzajach krycia (coverage) i ścieżkach – FTN Data via nflverse, na licencji{" "}
     <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer" style={{color:"var(--ac)"}}>CC BY-SA 4.0</a>; alignment, ścieżki i krycie (est.) z bieżącego sezonu – Gridiris (dane NFL Next Gen Stats); depth charty i statusy kontuzji – ESPN.
     Kursy: Superbet (PL) via OddsPapi; mogą różnić się od aktualnych na stronie bukmachera. Aplikacja ma charakter informacyjny i nie gwarantuje wyników zakładów. Hazard wiąże się z ryzykiem, 18+.</footer>;
+  if(view==="value")return <main style={{maxWidth:"none"}}><ValuePage vl={vl} games={games} onBack={()=>setView("")} pick={pick}/>{footer}</main>;
   if(view==="matchup"&&g)return <main style={{maxWidth:"none"}}><MatchupPage g={g} gd={gd} gt={gt} gdf={gdf} onBack={()=>setView("")} pick={pick}/>{footer}</main>;
   if(p&&g)return <main style={{maxWidth:"none"}}>
     <button className="back" onClick={()=>setP(null)}>← Wróć do meczu {g.away_team} @ {g.home_team}</button>
@@ -618,6 +670,6 @@ export default function App(){
   return <main><h1>NFL Edge</h1><p className="mu">Wybierz mecz, a potem zawodnika z depth chartu.</p>
     {!games.length&&<p className="mu">Brak nadchodzących meczów w terminarzu.</p>}
     <div className="chips">{games.map(x=><button key={x.game_id} className="chip" aria-pressed={g?.game_id===x.game_id} onClick={()=>setG(x)}>{x.away_team} @ {x.home_team} <span className="mu">{D(x.gameday,2)}</span></button>)}</div>
-    {g&&<div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment →</button></div>}
+    <div className="chips">{g&&<button className="chip" onClick={()=>setView("matchup")}>Alignment →</button>}<button className="chip" onClick={()=>setView("value")}>Ranking value →</button></div>
     {g&&<div className="grid"><Depth team={g.away_team}/><Depth team={g.home_team}/></div>}{footer}</main>;
 }

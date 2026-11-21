@@ -3,7 +3,8 @@
 Zapisuje: web/public/data/odds.json (bieżące linie), web/public/data/odds_history.json (ruch linii od otwarcia rynku)
 oraz ingest/odds_players.json (mapa identyfikatorów zawodników OddsPapi -> nazwiska; commitujemy ją).
 Uruchamiaj PO build_data.py. Klucz: zmienna ODDSPAPI_KEY. Lokalnie ODDS_CACHE=1 oszczędza limit zapytań.
-Zużycie: ok. 2 + liczba meczów kolejki zapytań; dodatkowo po jednym zapytaniu o kursy dla meczów z nieznanymi zawodnikami.
+Zużycie limitu: 2 zapytania (mecze i katalog rynków) + po jednym zapytaniu o kursy dla meczów z nieznanymi zawodnikami; historical-odds jest darmowe
+i nie wlicza się do limitu, ale ma osobny limit częstotliwości (min. 5 s między zapytaniami).
 """
 import datetime as dt
 import hashlib
@@ -45,13 +46,14 @@ NICK = {"ARI": "cardinals", "ATL": "falcons", "BAL": "ravens", "BUF": "bills", "
         "NYJ": "jets", "PHI": "eagles", "PIT": "steelers", "SF": "49ers", "SEA": "seahawks", "TB": "buccaneers",
         "TEN": "titans", "WAS": "commanders"}
 calls = 0
+last_hist = 0.0  # moment ostatniego zapytania historical-odds (API wymaga min. 5 s przerwy między takimi zapytaniami)
 
 
 def call(path, **params):
     """Zapytanie do OddsPapi z ponawianiem przy 429, licznikiem użytych zapytań (limit na uruchomienie) i
     opcjonalnym lokalnym cache (ODDS_CACHE=1, ważny 6 godzin).
     """
-    global calls
+    global calls, last_hist
     params["apiKey"] = KEY
     cfile = None
     if os.environ.get("ODDS_CACHE"):
@@ -64,11 +66,23 @@ def call(path, **params):
         if calls >= MAX_CALLS:
             raise RuntimeError(f"limit {MAX_CALLS} zapytań na uruchomienie")
         calls += 1
+        if path == "historical-odds":  # osobny limit częstotliwości: min. 5 sekund między zapytaniami
+            time.sleep(max(0.0, 5.2 - (time.time() - last_hist)))
         r = requests.get(f"{BASE}/{path}", params=params, timeout=300)
+        if path == "historical-odds":
+            last_hist = time.time()
         if r.status_code == 429:
-            time.sleep(r.json().get("error", {}).get("retryMs", 2000) / 1000 + 0.3)
+            err = r.json().get("error", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
+            if err.get("code") == "REQUEST_LIMIT_EXCEEDED":  # miesięczny limit wyczerpany - ponawianie nie pomoże
+                raise RuntimeError(f"429 REQUEST_LIMIT_EXCEEDED {err.get('details', '')}")
+            time.sleep(err.get("retryMs", 2000) / 1000 + 0.3)
             continue
-        r.raise_for_status()
+        if not r.ok:  # pełny opis błędu z odpowiedzi API (kod i szczegóły), a nie sam kod HTTP
+            try:
+                err = r.json().get("error", {})
+            except Exception:
+                err = {}
+            raise RuntimeError(f"{r.status_code} {err.get('code', '')} {err.get('details') or err.get('message') or r.text[:200]} [{path}]")
         data = r.json()
         if cfile:
             cfile.write_text(json.dumps(data), encoding="utf-8")
@@ -225,9 +239,11 @@ for fx in upcoming:
                         if pid != "0" and price.get("playerName"):
                             pmap[pid] = flip(price["playerName"])
             props, gm, unknown = collect(book)
-    except Exception as e:
-        print("przerywam pobieranie:", e)
-        break
+    except RuntimeError as e:  # błąd jednego meczu nie zatrzymuje pozostałych (poza wyczerpanym limitem)
+        print("pomijam mecz", fx.get("participant1Name"), "-", fx.get("participant2Name"), fx["startTime"], ":", e)
+        if "REQUEST_LIMIT_EXCEEDED" in str(e) or "zapytań na uruchomienie" in str(e):
+            break
+        continue
     names = {norm(n) for n, _ in props}
     scored = [(len(names & (by_team.get(g["away_team"], {}).keys() | by_team.get(g["home_team"], {}).keys())), g) for g in games]
     overlap, g = max(scored, key=lambda x: x[0])
@@ -297,3 +313,10 @@ print(f"zapisano: {len(out['games'])} meczów, {len(out['players'])} zawodników
 if unmatched:
     print("niedopasowani zawodnicy (", len(unmatched), "):", sorted(set(unmatched))[:25])
 print("próbka:", json.dumps(next(iter(out["games"].values())), ensure_ascii=False)[:400])
+
+# --- ranking value: przelicza value.json po każdym odświeżeniu kursów ---
+try:
+    from value_data import build_value
+    build_value(DATA)
+except Exception as e:
+    print("ranking value pominięty:", e)

@@ -271,3 +271,10 @@ try:
     build_gridiris(OUT)
 except Exception as e:
     print("gridiris pominięty:", e)
+
+# --- ranking value: propsy Superbet kontra historia zawodników (value.json); opcjonalne ---
+try:
+    from value_data import build_value
+    build_value(OUT)
+except Exception as e:
+    print("ranking value pominięty:", e)
