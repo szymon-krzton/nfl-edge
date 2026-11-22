@@ -80,10 +80,10 @@ const TS=s=>new Date(s).toLocaleString("pl-PL",{day:"numeric",month:"numeric",ho
  * Linijka z kursami Superbet dla meczu: spread, moneyline i total z pierwszym pomiarem (otwarcie) oraz
  * informacją o rynkach zamkniętych lub wstrzymanych.
  */
-function GameOdds({gl,gh}){
+function GameOdds({gl,gh,full}){
   if(!gl)return null;
   const sg=n=>n>0?`+${n}`:`${n}`,parts=[];
-  const op=(now,first,fmt)=>first!=null&&first!==now?` (otwarcie: ${fmt(first)})`:"";
+  const op=(now,first,fmt)=>first!=null&&first!==now?` (${full?"otwarcie":"pierwszy pomiar"}: ${fmt(first)})`:"";
   if(gl.spread)parts.push("spread "+Object.entries(gl.spread).map(([t,x])=>`${t} ${sg(x.line)} (${x.price})${op(x.line,gh?.spread?.[t]?.[0]?.[1],sg)}`).join(" / "));
   if(gl.moneyline)parts.push("ML "+Object.entries(gl.moneyline).map(([t,x])=>`${t} ${x}${op(x,gh?.moneyline?.[t]?.[0]?.[1],v=>v)}`).join(" / "));
   if(gl.total)parts.push(`total ${gl.total.line}${op(gl.total.line,gh?.total?.[0]?.[1],v=>v)} (Over ${gl.total.over} / Under ${gl.total.under})`);
@@ -91,12 +91,12 @@ function GameOdds({gl,gh}){
   return parts.length?<div className="mu">Superbet: {parts.join(" · ")}</div>:null;
 }
 
-/** Rozwijana tabela ruchu linii zawodnika od otwarcia rynku (czas, linia, kursy Over/Under). */
-function Moves({hs,td}){
+/** Rozwijana tabela ruchu linii zawodnika (czas, linia, kursy Over/Under): od otwarcia rynku dla meczów zakończonych (pełna historia z API) albo od pierwszego własnego pomiaru. */
+function Moves({hs,td,full}){
   if(!hs||hs.length<2)return null;
   const f=hs[0],l=hs[hs.length-1],d=l[1]-f[1];
   const ch=td?`kurs ${f[1]} → ${l[1]}`:`linia ${f[1]} → ${l[1]}${d?` (${d>0?"+":""}${d.toFixed(1)})`:""}`;
-  return <details style={{margin:"0 0 8px"}}><summary className="mu" style={{cursor:"pointer"}}>Ruch linii od otwarcia rynku: {ch} · {hs.length} zmian</summary>
+  return <details style={{margin:"0 0 8px"}}><summary className="mu" style={{cursor:"pointer"}}>Ruch linii {full?"od otwarcia rynku":"od pierwszego pomiaru"}: {ch} · {hs.length} {full?"zmian":"pomiarów"}</summary>
     <div style={{maxHeight:260,overflowY:"auto"}}><Plain head={td?["Czas","Kurs"]:["Czas","Linia","Over","Under"]} rows={hs.map(r=>[TS(r[0]),...r.slice(1)])}/></div></details>;
 }
 
@@ -104,11 +104,11 @@ function Moves({hs,td}){
  * Podsumowanie linii Superbet dla zawodnika: linia, kursy i szansa Over bez marży (dla anytime TD sam kurs), z
  * historią ruchu linii.
  */
-function OddsChip({o,hs}){
+function OddsChip({o,hs,full}){
   const b=v=><b style={{color:"var(--tx)"}}>{v}</b>;
-  if(o.yes!=null)return <><p className="mu" style={{margin:"8px 0"}}>Superbet: anytime TD {b(o.yes)}{o.closed&&" · linia zamykająca / wstrzymana"}</p><Moves hs={hs} td/></>;
+  if(o.yes!=null)return <><p className="mu" style={{margin:"8px 0"}}>Superbet: anytime TD {b(o.yes)}{o.closed&&" · linia zamykająca / wstrzymana"}</p><Moves hs={hs} td full={full}/></>;
   const x=1/o.over,y=1/o.under;
-  return <><p className="mu" style={{margin:"8px 0"}}>Superbet: linia {b(o.line)} · Over {b(o.over)} · Under {b(o.under)} · szansa Over bez marży {b(`${(x/(x+y)*100).toFixed(1)}%`)}{o.closed&&" · linia zamykająca / wstrzymana"}</p><Moves hs={hs}/></>;
+  return <><p className="mu" style={{margin:"8px 0"}}>Superbet: linia {b(o.line)} · Over {b(o.over)} · Under {b(o.under)} · szansa Over bez marży {b(`${(x/(x+y)*100).toFixed(1)}%`)}{o.closed&&" · linia zamykająca / wstrzymana"}</p><Moves hs={hs} full={full}/></>;
 }
 
 /**
@@ -235,7 +235,7 @@ function ChartBlock({p,log,g,opp,odds,hist,mates}){
     <div className="chips">{tabs.map(([key,nm])=><button key={key} className="tab" aria-pressed={k===key} onClick={()=>setK(key)}>{nm}</button>)}</div>
     <RosterFilter mates={mates||[]} flt={flt} setFlt={setFlt}/>
     <ContextFilter ctx={ctx} setCtx={setCtx} onMatch={matchCtx}/>
-    {o&&<OddsChip o={o} hs={hs}/>}
+    {o&&<OddsChip o={o} hs={hs} full={hist?.[g.game_id]?.full}/>}
     <Chart data={data} line={L} onPick={d=>setBox(d.gid)} empty={rg==="h2h"?"Brak bezpośredniego meczu":"Brak meczów w wybranym zakresie"}/>
     <div className="chips" style={{justifyContent:"space-between"}}>
       <span className="mu">{L!=null?`Kafelki: mecze ponad linią ${L} (Over)`:"Wpisz linię, aby zobaczyć trafność Over w każdym zakresie"}</span>
@@ -649,7 +649,7 @@ export default function App(){
     <button className="back" onClick={()=>setP(null)}>← Wróć do meczu {g.away_team} @ {g.home_team}</button>
     <h1>{p.name}<Badge s={p.status} inj={p.injury}/></h1>
     <div className="mu">{p.pos} · {p.team} vs {opp||"–"} · {D(g.gameday,2)}</div>
-    <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game}/>
+    <GameOdds gl={odds?.games?.[g.game_id]} gh={hist?.[g.game_id]?.game} full={hist?.[g.game_id]?.full}/>
     <div className="chips"><button className="chip" onClick={()=>setView("matchup")}>Alignment →</button></div>
     <div className="cols">
       <div className="col">
