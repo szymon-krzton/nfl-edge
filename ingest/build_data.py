@@ -146,6 +146,9 @@ if todo.height:
                  .select(["game_id", "season", "week", "gameday", "away_team", "home_team"]
                          + [c for c in ("spread_line", "total_line", "roof", "away_rest", "home_rest", "div_game", "surface", "gametime") if c in todo.columns]).to_dicts())
 (OUT / "schedule.json").write_text(json.dumps(games))
+# pełny terminarz najnowszego sezonu (także rozegrane mecze) - dla odds_data.py (przypisanie zakończonych meczów)
+(OUT / "schedule_all.json").write_text(json.dumps(
+    sch.filter(pl.col("season") == pl.col("season").max()).select(["game_id", "season", "week", "gameday", "away_team", "home_team"]).to_dicts()))
 
 # --- statusy: raport kontuzji (OUT / D / Q) i lista rezerwowa kontuzjowanych (IR) ---
 LAB = {"out": "OUT", "doubtful": "D", "questionable": "Q"}

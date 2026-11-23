@@ -1,283 +1,498 @@
-"""Główny skrypt budujący dane dla aplikacji (GitHub Actions uruchamia go co kilka godzin, można też ręcznie).
+"""Kursy i linie Superbet (PL) z OddsPapi -> odds.json (bieżące linie) i odds_history.json (ruch linii).
 
-Pobiera statystyki, terminarze, depth charty i kontuzje (nflverse, ESPN) i zapisuje JSON-y w web/public/data:
-  players.json, logs/<id>.json  - zawodnicy i logi ich meczów (z kontekstem: spread, total, dach, odpoczynek, dom/wyjazd, data)
-  box/<game_id>.json            - uproszczone box score'y (QB, RB, WR, TE)
-  defense/<TEAM>.json           - obrony: średnie oddawane pozycjom i ostatnie wyniki zawodników
-  schedule.json, depth.json, usage.json - nadchodzące mecze, depth charty ze statusami, usage zawodników
-Na końcu wywołuje moduły opcjonalne (błąd jednego nie blokuje reszty): coverage_data (FTN, poprzedni sezon), inseason_data
-(strefy targetów i blitz), redzone_data oraz gridiris_data (alignment, ścieżki i krycie z ręcznie importowanych meczów).
-Kursy generuje osobny skrypt odds_data.py, a dane Gridiris trafiają przez gridiris_import.py do ingest/gridiris/*.json."""
+Darmowy plan OddsPapi nie daje historical-odds dla meczów nadchodzących i trwających (tylko dla zakończonych), dlatego:
+  - bieżące linie wszystkich meczów NFL pobieramy jednym zapytaniem odds-by-tournaments (awaryjnie, z ODDS_FALLBACK=1, pojedynczo: odds),
+  - ruch linii budujemy z własnych pomiarów: przy każdym uruchomieniu dopisujemy pomiar, gdy linia lub kurs się zmieniły
+    (etykieta w aplikacji: „od pierwszego pomiaru”),
+  - po zakończeniu meczu uzupełniamy pełną historię od otwarcia do zamknięcia z darmowego historical-odds (hist[...]["full"] = True).
+Katalog rynków jest zapisywany w ingest/odds_catalog.json (odświeżany co 7 dni), mapa id zawodników w ingest/odds_players.json.
+Zużycie limitu: ok. 2 zapytania na uruchomienie (mecze + kursy), plus katalog co tydzień i kursy meczu z nieznanymi zawodnikami.
+Uruchamiaj PO build_data.py. Klucz: zmienna ODDSPAPI_KEY. Lokalnie ODDS_CACHE=1 oszczędza limit przy poprawkach."""
+import datetime as dt
+import hashlib
 import json
+import os
+import re
+import sys
+import time
+import unicodedata
 from pathlib import Path
-import nflreadpy as nfl
-import polars as pl
+import requests
 
-SEASONS = [2023, 2024, 2025, 2026]
-POS = ["QB", "RB", "WR", "TE"]
-TOP = {"QB": 3, "RB": 6, "WR": 9, "TE": 5}  # ilu zawodników na pozycję w depth chart
-STAT = ["completions", "attempts", "passing_yards", "passing_tds", "carries",
-        "rushing_yards", "targets", "receptions", "receiving_yards", "receiving_tds", "rushing_tds", "passing_interceptions"]
-OUT = Path(__file__).resolve().parents[1] / "web" / "public" / "data"
-(OUT / "logs").mkdir(parents=True, exist_ok=True)
-(OUT / "defense").mkdir(parents=True, exist_ok=True)
+KEY = os.environ.get("ODDSPAPI_KEY")
+if not KEY:
+    sys.exit("Ustaw zmienną środowiskową ODDSPAPI_KEY.")
+BASE = "https://api.oddspapi.io/v4"
+BOOK = "superbet.pl"
+SLUGS = (BOOK, "superbet")
+MAX_CALLS = int(os.environ.get("ODDS_MAX_CALLS", "40"))
+DATA = Path(__file__).resolve().parents[1] / "web" / "public" / "data"
+MAPFILE = Path(__file__).resolve().parent / "odds_players.json"
+CATFILE = Path(__file__).resolve().parent / "odds_catalog.json"
+CACHE = Path(__file__).resolve().parent / ".odds_cache"
+PROPS = {
+    "Over Under Player Receiving Yards (incl. overtime)": "receiving_yards",
+    "Over Under Player Receptions (incl. overtime)": "receptions",
+    "Over Under Player Rush Yards (incl. overtime)": "rushing_yards",
+    "Over Under Player Rush Attempts (incl. overtime)": "carries",
+    "Over Under Player Pass Yards (incl. overtime)": "passing_yards",
+    "Over Under Player TD Passes (incl. overtime)": "passing_tds",
+    "Over Under Player Pass Completions (incl. overtime)": "completions",
+    "Over Under Player Pass Attempts (incl. overtime)": "attempts",
+    "Over Under Player Interceptions (incl. overtime)": "passing_interceptions",
+    "Player To Score TD (incl. overtime)": "td",
+}
+GAME = {"Total (incl. overtime)": "total", "Handicap (incl. overtime)": "handicap", "Winner (incl. overtime)": "winner"}
+NICK = {"ARI": "cardinals", "ATL": "falcons", "BAL": "ravens", "BUF": "bills", "CAR": "panthers", "CHI": "bears",
+        "CIN": "bengals", "CLE": "browns", "DAL": "cowboys", "DEN": "broncos", "DET": "lions", "GB": "packers",
+        "HOU": "texans", "IND": "colts", "JAX": "jaguars", "KC": "chiefs", "LV": "raiders", "LAC": "chargers",
+        "LA": "rams", "MIA": "dolphins", "MIN": "vikings", "NE": "patriots", "NO": "saints", "NYG": "giants",
+        "NYJ": "jets", "PHI": "eagles", "PIT": "steelers", "SF": "49ers", "SEA": "seahawks", "TB": "buccaneers",
+        "TEN": "titans", "WAS": "commanders"}
+calls = 0
+last_hist = 0.0  # moment ostatniego zapytania historical-odds (API wymaga min. 5 s przerwy między takimi zapytaniami)
 
-frames = []
-for s in SEASONS:
+
+def call(path, **params):
+    """Zapytanie do OddsPapi z ponawianiem przy 429, licznikiem użytych zapytań (limit na uruchomienie) i
+    opcjonalnym lokalnym cache (ODDS_CACHE=1, ważny 6 godzin). Błędy zgłasza jako RuntimeError z kodem i opisem z API."""
+    global calls, last_hist
+    params["apiKey"] = KEY
+    cfile = None
+    if os.environ.get("ODDS_CACHE"):
+        CACHE.mkdir(exist_ok=True)
+        h = hashlib.sha1((path + json.dumps({k: str(v) for k, v in params.items() if k != "apiKey"}, sort_keys=True)).encode()).hexdigest()
+        cfile = CACHE / f"{h}.json"
+        if cfile.exists() and time.time() - cfile.stat().st_mtime < 6 * 3600:
+            return json.loads(cfile.read_text(encoding="utf-8"))
+    for _ in range(4):
+        if calls >= MAX_CALLS:
+            raise RuntimeError(f"limit {MAX_CALLS} zapytań na uruchomienie")
+        calls += 1
+        if path == "historical-odds":  # osobny limit częstotliwości: min. 5 sekund między zapytaniami
+            time.sleep(max(0.0, 5.2 - (time.time() - last_hist)))
+        r = requests.get(f"{BASE}/{path}", params=params, timeout=300)
+        if path == "historical-odds":
+            last_hist = time.time()
+        if r.status_code == 429:
+            err = r.json().get("error", {}) if r.headers.get("content-type", "").startswith("application/json") else {}
+            if err.get("code") == "REQUEST_LIMIT_EXCEEDED":  # miesięczny limit wyczerpany - ponawianie nie pomoże
+                raise RuntimeError(f"429 REQUEST_LIMIT_EXCEEDED {err.get('details', '')}")
+            time.sleep(err.get("retryMs", 2000) / 1000 + 0.3)
+            continue
+        if not r.ok:
+            try:
+                err = r.json().get("error", {})
+            except Exception:
+                err = {}
+            raise RuntimeError(f"{r.status_code} {err.get('code', '')} {err.get('details') or err.get('message') or r.text[:200]} [{path}]")
+        data = r.json()
+        if cfile:
+            cfile.write_text(json.dumps(data), encoding="utf-8")
+        return data
+    raise RuntimeError("limit zapytań (429)")
+
+
+def norm(s):
+    """Nazwisko bez akcentów i znaków specjalnych, małymi literami, bez przyrostków (Jr, Sr, II...), do dopasowania nazw z kursów do zawodników."""
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    s = re.sub(r"[^a-z ]", "", s)
+    return " ".join(w for w in s.split() if w not in ("jr", "sr", "ii", "iii", "iv"))
+
+
+def flip(name):  # "Maye, Drake" -> "Drake Maye"
+    """Zamienia zapis 'Nazwisko, Imię' na 'Imię Nazwisko'."""
+    a, _, b = (name or "").partition(",")
+    return f"{b.strip()} {a.strip()}".strip() if b else name
+
+
+def find(ids, name):
+    """Znajduje player_id po nazwisku wśród zawodników drużyn meczu: najpierw dokładne dopasowanie, potem po nazwisku i trzech
+    pierwszych literach imienia (Cameron/Cam). Zwraca None, gdy wynik jest niejednoznaczny."""
+    n = norm(name)
+    if not n:
+        return None
+    if n in ids:
+        return ids[n]
+    t = n.split()
+    if len(t) < 2:
+        return None
+    c = set()
+    for key, pid in ids.items():
+        k = key.split()
+        if len(k) > 1 and k[-1] == t[-1] and (k[0].startswith(t[0][:3]) or t[0].startswith(k[0][:3])):
+            c.add(pid)
+    return c.pop() if len(c) == 1 else None
+
+
+def team_of(name):
+    """Skrót drużyny po nazwie z pola fixture (po słowie-pseudonimie drużyny, np. 'patriots'); None, gdy nie rozpoznano."""
+    n = str(name or "").lower()
+    return next((a for a, k in NICK.items() if k in n), None)
+
+
+def best_line(lines, a="Over", b="Under"):
+    """Z linii {h: {strona: kurs}} wybiera tę o najbardziej wyrównanych kursach (główną): (h, kurs_a, kurs_b) albo None."""
+    c = [(abs(v[a] - v[b]), h, v) for h, v in lines.items() if a in v and b in v]
+    if not c:
+        return None
+    _, h, v = min(c, key=lambda x: x[0])
+    return h, v[a], v[b]
+
+
+def push(lst, row):
+    """Dopisuje pomiar [czas, ...wartości] tylko wtedy, gdy wartości różnią się od ostatniego pomiaru."""
+    if not lst or lst[-1][1:] != row[1:]:
+        lst.append(row)
+
+
+def timeline(lines, a, b):
+    """lines: {linia: {strona: [wpisy]}} z historical-odds -> ([[czas, linia, cena_a, cena_b], ...], czy_rynek_aktywny_teraz).
+    W każdej chwili wybieramy aktywną linię o najbardziej wyrównanych kursach (główną)."""
+    ev = {(h, s): sorted(v.get(s, []), key=lambda e: e["createdAt"]) for h, v in lines.items() for s in (a, b)}
+    times = sorted({e["createdAt"] for lst in ev.values() for e in lst})
+    idx, cur, rows, live = {k: 0 for k in ev}, {}, [], False
+    for t in times:
+        for k, lst in ev.items():
+            while idx[k] < len(lst) and lst[idx[k]]["createdAt"] <= t:
+                cur[k] = lst[idx[k]]
+                idx[k] += 1
+        cands = [(abs(cur[(h, a)]["price"] - cur[(h, b)]["price"]), h) for h in lines
+                 if (h, a) in cur and (h, b) in cur and cur[(h, a)]["active"] and cur[(h, b)]["active"]]
+        live = bool(cands)
+        if cands:
+            _, h = min(cands, key=lambda c: c[0])
+            row = [t, h, cur[(h, a)]["price"], cur[(h, b)]["price"]]
+            if not rows or rows[-1][1:] != row[1:]:
+                rows.append(row)
+    return rows, live
+
+
+def timeline_one(entries):
+    """Przebieg jednej ceny (np. anytime TD): lista zmian [czas, cena] z aktywnych wpisów i informacja, czy ostatni wpis jest aktywny."""
+    rows = []
+    for e in sorted(entries, key=lambda e: e["createdAt"]):
+        if e["active"] and (not rows or rows[-1][1] != e["price"]):
+            rows.append([e["createdAt"], e["price"]])
+    last = max(entries, key=lambda e: e["createdAt"]) if entries else None
+    return rows, bool(last and last["active"])
+
+
+def read(path, default):
+    """Wczytuje JSON z pliku albo zwraca wartość domyślną, gdy pliku nie ma."""
+    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else default
+
+
+def load_catalog():
+    """Katalog rynków OddsPapi z pliku w repo (odświeżany co 7 dni, żeby oszczędzać limit zapytań)."""
+    c = read(CATFILE, None)
+    if c and time.time() - c["fetched"] < 7 * 86400:
+        return c["markets"]
+    markets = call("markets", sportId=14)
+    CATFILE.write_text(json.dumps({"fetched": time.time(), "markets": markets}, ensure_ascii=False), encoding="utf-8")
+    return markets
+
+
+# --- wejście: zawodnicy i terminarz z build_data.py oraz mapa id OddsPapi -> nazwiska ---
+players = read(DATA / "players.json", [])
+games = read(DATA / "schedule.json", [])
+by_team = {}
+for p in players:
+    by_team.setdefault(p["team"], {})[norm(p["name"])] = p["player_id"]
+for team, d in read(DATA / "depth.json", {}).items():
+    for lst in d.values():
+        for x in lst:
+            by_team.setdefault(team, {}).setdefault(norm(x["name"]), x["player_id"])
+pmap = read(MAPFILE, {})  # id OddsPapi -> "Imię Nazwisko"
+hist = read(DATA / "odds_history.json", {})
+old_games = read(DATA / "odds.json", {}).get("games", {})
+for gid, H in hist.items():  # migracja wpisów ze starszego formatu (bez fixtureId, drużyn i flagi full)
+    parts = gid.split("_")
+    H.setdefault("away", parts[2] if len(parts) == 4 else None)
+    H.setdefault("home", parts[3] if len(parts) == 4 else None)
+    H.setdefault("p1", None)
+    H.setdefault("p2", None)
+    H.setdefault("full", False)
+    if not H.get("fixtureId") and gid in old_games:
+        H["fixtureId"] = old_games[gid].get("fixtureId")
+fid2gid = {h["fixtureId"]: gid for gid, h in hist.items() if h.get("fixtureId")}
+all_games = read(DATA / "schedule_all.json", [])  # pełny terminarz sezonu (także rozegrane mecze) - do przypisania zakończonych fixture
+
+# --- lista meczów (od 3 dni wstecz do +8 dni) i katalog rynków ---
+today = dt.date.today()
+fixtures = call("fixtures", sportId=14, tournamentId=31, **{"from": str(today - dt.timedelta(days=3)), "to": str(today + dt.timedelta(days=8))})
+utc = dt.datetime.now(dt.timezone.utc)
+fmt = lambda t: t.strftime("%Y-%m-%dT%H:%M")
+now_s, started_s, finished_s = fmt(utc), fmt(utc - dt.timedelta(hours=14)), fmt(utc - dt.timedelta(hours=5))
+upcoming = sorted((f for f in fixtures if f["startTime"] > started_s), key=lambda f: f["startTime"])
+print("mecze do pobrania:", len(upcoming), "| znanych zawodników w mapie:", len(pmap))
+catalog = load_catalog()
+mname = {m["marketId"]: m["marketName"] for m in catalog}
+hand = {m["marketId"]: m.get("handicap") for m in catalog}
+oname = {(m["marketId"], o["outcomeId"]): o["outcomeName"] for m in catalog for o in m.get("outcomes", [])}
+
+
+def collect_now(book):
+    """Bieżące ceny bukmachera -> propsy {(nazwisko, statystyka): {linia: {strona: kurs}}} i rynki meczowe {rynek: {linia: {strona: kurs}}}
+    (tylko aktywne ceny); zwraca też id zawodników, których nazwisk jeszcze nie znamy. Uczy mapę pmap z pola playerName, jeśli jest."""
+    props, gm, unknown = {}, {}, set()
+    for mid, m in book.get("markets", {}).items():
+        name, h = mname.get(int(mid), ""), hand.get(int(mid))
+        for oid, o in m["outcomes"].items():
+            side = oname.get((int(mid), int(oid)), "")
+            for pid, pr in o["players"].items():
+                if not pr.get("active") or pr.get("price") is None:
+                    continue
+                if pid == "0":
+                    if name in GAME:
+                        gm.setdefault(GAME[name], {}).setdefault(h, {})[side] = pr["price"]
+                elif name in PROPS:
+                    if pr.get("playerName") and pid not in pmap:
+                        pmap[pid] = flip(pr["playerName"])
+                    if pid in pmap:
+                        props.setdefault((pmap[pid], PROPS[name]), {}).setdefault(h, {})[side] = pr["price"]
+                    else:
+                        unknown.add(pid)
+    return props, gm, unknown
+
+
+def collect(book):
+    """Jak collect_now, ale dla odpowiedzi historical-odds: zamiast cen są listy wpisów z czasem (createdAt, price, active)."""
+    props, gm = {}, {}
+    for mid, m in book["markets"].items():
+        name, h = mname.get(int(mid), ""), hand.get(int(mid))
+        for oid, o in m["outcomes"].items():
+            side = oname.get((int(mid), int(oid)), "")
+            for pid, ents in o["players"].items():
+                if pid == "0":
+                    if name in GAME:
+                        gm.setdefault(GAME[name], {}).setdefault(h, {})[side] = ents
+                elif name in PROPS and pid in pmap:
+                    props.setdefault((pmap[pid], PROPS[name]), {}).setdefault(h, {})[side] = ents
+    return props, gm
+
+
+def fetch_boards(fxs):
+    """Bieżące kursy Superbet: jedno zapytanie odds-by-tournaments dla wszystkich meczów NFL; w razie błędu (i tylko z ODDS_FALLBACK=1) kursy każdego meczu osobno (odds)."""
     try:
-        frames.append(nfl.load_player_stats([s]))
-    except Exception as e:  # sezon bez danych
-        print("pomijam", s, e)
-df = pl.concat(frames, how="diagonal_relaxed")
-stats = [c for c in STAT if c in df.columns]
-df = (df.filter(pl.col("position").is_in(POS), pl.col("season_type") == "REG")
-        .with_columns([pl.col(c).fill_null(0) for c in stats]))
-# daty meczów (kolumna "date") z terminarza, dołączane po (sezon, tydzień, drużyna)
-_sch = nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
-def sc(n, alias=None, neg=False):  # kolumna terminarza (lub null, gdy jej brak) w perspektywie drużyny
-    """Zwraca kolumnę terminarza `n` jako wyrażenie polars w perspektywie drużyny (przy neg=True ze zmienionym
-    znakiem, np. spread dla wyjazdu). Gdy kolumny brak w danych, zwraca null.
-    """
-    e = pl.col(n) if n in _sch.columns else pl.lit(None, dtype=pl.Float64)
-    return (e * -1 if neg else e).alias(alias or n)
+        resp = call("odds-by-tournaments", tournamentIds=31, bookmakers=BOOK)
+        return {f["fixtureId"]: f.get("bookmakerOdds") or {} for f in resp}
+    except RuntimeError as e:
+        print("odds-by-tournaments niedostępne:", e)
+    if not os.environ.get("ODDS_FALLBACK"):  # pobieranie pojedyncze kosztuje po 1 zapytaniu na mecz - tylko świadomie
+        print("pomijam pobieranie kursów (ustaw ODDS_FALLBACK=1, aby pobrać je pojedynczo: ok. 1 zapytanie na mecz)")
+        return {}
+    boards = {}
+    for fx in fxs:
+        try:
+            boards[fx["fixtureId"]] = call("odds", fixtureId=fx["fixtureId"]).get("bookmakerOdds") or {}
+        except RuntimeError as e:
+            print("pomijam mecz", fx.get("participant1Name"), "-", fx.get("participant2Name"), ":", e)
+            if "REQUEST_LIMIT_EXCEEDED" in str(e) or "zapytań na uruchomienie" in str(e):
+                break
+    return boards
 
 
-# nawierzchnia (trawa / sztuczna) i prime time (kickoff od 19:00 czasu wschodniego)
-surf_e = (pl.when(pl.col("surface").is_null() | (pl.col("surface") == "")).then(pl.lit(None, dtype=pl.Utf8))
-            .when(pl.col("surface").str.to_lowercase().str.contains("grass")).then(pl.lit("grass")).otherwise(pl.lit("turf")).alias("surf")
-          if "surface" in _sch.columns else pl.lit(None, dtype=pl.Utf8).alias("surf"))
-prime_e = ((pl.col("gametime").str.slice(0, 2).cast(pl.Int64, strict=False) >= 19).cast(pl.Int8).alias("prime")
-           if "gametime" in _sch.columns else pl.lit(None, dtype=pl.Int8).alias("prime"))
+def match_game(fx, names):
+    """Mecz z terminarza dla fixture: najpierw po zapisanym wcześniej fixtureId, potem po drużynach z nazw uczestników, na końcu po liczbie wspólnych nazwisk zawodników. None, gdy nie ma dopasowania."""
+    gid = fid2gid.get(fx["fixtureId"])
+    if gid:
+        h = hist[gid]
+        return {"game_id": gid, "away_team": h["away"], "home_team": h["home"]}
+    p1, p2 = team_of(fx.get("participant1Name")), team_of(fx.get("participant2Name"))
+    for g in games:  # najpewniejsze: obie drużyny z nazw uczestników zgadzają się z meczem z terminarza
+        if p1 and p2 and {p1, p2} == {g["away_team"], g["home_team"]}:
+            return g
+    scored = [(len(names & (by_team.get(g["away_team"], {}).keys() | by_team.get(g["home_team"], {}).keys())), g) for g in games]
+    overlap, g = max(scored, key=lambda x: x[0]) if scored else (0, None)
+    return g if overlap >= 3 else None
 
-gdates = (pl.concat([_sch.select(["season", "week", pl.col("home_team").alias("team"), "gameday", pl.lit(True).alias("home"), pl.col("game_id").alias("gid"),
-                                sc("spread_line", "sp"), sc("total_line", "tot"), sc("home_rest", "rest"), sc("roof"), sc("wind"), sc("div_game", "div"), surf_e, prime_e]),
-                     _sch.select(["season", "week", pl.col("away_team").alias("team"), "gameday", pl.lit(False).alias("home"), pl.col("game_id").alias("gid"),
-                                sc("spread_line", "sp", neg=True), sc("total_line", "tot"), sc("away_rest", "rest"), sc("roof"), sc("wind"), sc("div_game", "div"), surf_e, prime_e])])
-            .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
-df = (df.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64))
-        .join(gdates, on=["season", "week", "team"], how="left").rename({"gameday": "date"}))
-print("mecze bez daty:", df.filter(pl.col("date").is_null()).height)
-base = ["season", "week", "team", "opponent_team", "position", "player_display_name", "date", "home", "gid", "sp", "tot", "rest", "roof", "wind", "div", "surf", "prime"]
 
-players = (df.group_by("player_id")
-             .agg(pl.col("player_display_name").last().alias("name"),
-                  pl.col("position").last().alias("pos"),
-                  pl.col("team").last().alias("team"), pl.len().alias("games"))
-             .filter(pl.col("games") >= 1).sort("name"))
-(OUT / "players.json").write_text(json.dumps(players.to_dicts()))
-
-keep = set(players["player_id"].to_list())
-parts = df.filter(pl.col("player_id").is_in(keep)).sort(["season", "week"]).partition_by("player_id", as_dict=True)
-for key, g in parts.items():
-    pid = key[0] if isinstance(key, tuple) else key
-    (OUT / "logs" / f"{pid}.json").write_text(json.dumps(g.select(base + stats).to_dicts()))
-
-# --- box score'y (uproszczone: QB, RB, WR, TE) - jeden plik na mecz ---
-(OUT / "box").mkdir(parents=True, exist_ok=True)
-meta = {r["game_id"]: r for r in _sch.select(["game_id", "week", "gameday", "away_team", "home_team", "away_score", "home_score"]).to_dicts()}
-bcols = ["player_id", "player_display_name", "position", "team"] + stats
-n_box = 0
-for gid, g in df.filter(pl.col("gid").is_not_null()).partition_by("gid", as_dict=True).items():
-    gid = gid[0] if isinstance(gid, tuple) else gid
-    m = meta.get(gid)
-    if not m:
+# --- bieżące linie: odds.json i pomiary do odds_history.json ---
+out = {"updated": utc.isoformat(timespec="minutes"), "bookmaker": BOOK, "players": {}, "games": {}}
+unmatched, stamp = [], out["updated"]
+boards = fetch_boards(upcoming)
+for fx in upcoming:
+    b = boards.get(fx["fixtureId"], {})
+    book = next((b[s] for s in SLUGS if s in b), None)
+    if not book:
+        if fx["startTime"] > now_s or fx["fixtureId"] not in fid2gid:  # linii jeszcze nie ma albo nie zdążyliśmy ich zapisać przed meczem
+            print("brak Superbet na meczu", fx.get("participant1Name"), "-", fx.get("participant2Name"), fx["startTime"])
+            continue
+        book = {}  # mecz rozpoczęty: rynki wstrzymane, pokażemy ostatnią znaną linię z historii pomiarów
+    props, gm, unknown = collect_now(book)
+    if unknown and fx["startTime"] > now_s:  # nieznani zawodnicy: jedno zapytanie o kursy meczu zwraca ich nazwiska
+        try:
+            b2 = call("odds", fixtureId=fx["fixtureId"]).get("bookmakerOdds") or {}
+            collect_now(next((b2[s] for s in SLUGS if s in b2), {}))
+            props, gm, unknown = collect_now(book)
+        except RuntimeError as e:
+            print("nie udało się pobrać nazwisk zawodników:", e)
+    g = match_game(fx, {norm(n) for n, _ in props})
+    if not g:
+        print("nie dopasowano meczu do terminarza:", fx.get("participant1Name"), "-", fx.get("participant2Name"), fx["startTime"])
         continue
-    ps = []
-    for r in g.select(bcols).to_dicts():
-        row = {"id": r["player_id"], "name": r["player_display_name"], "pos": r["position"], "team": r["team"]}
-        row.update({c: int(r[c]) for c in stats if r[c]})
-        ps.append(row)
-    (OUT / "box" / f"{gid}.json").write_text(json.dumps({
-        "date": m["gameday"], "week": m["week"],
-        "away": {"team": m["away_team"], "score": m["away_score"]}, "home": {"team": m["home_team"], "score": m["home_score"]},
-        "players": ps}, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    n_box += 1
-print("box score'y:", n_box, "meczów")
+    gid = g["game_id"]
+    ids = {**by_team.get(g["away_team"], {}), **by_team.get(g["home_team"], {})}
+    p1, p2 = team_of(fx.get("participant1Name")), team_of(fx.get("participant2Name"))
+    H = hist.setdefault(gid, {"fixtureId": fx["fixtureId"], "startTime": fx["startTime"], "away": g["away_team"], "home": g["home_team"],
+                              "p1": p1, "p2": p2, "full": False, "players": {}, "game": {}})
+    p1, p2 = H.get("p1") or p1, H.get("p2") or p2
+    n_ok = 0
+    for (pname, stat), lines in props.items():
+        pid = find(ids, pname)
+        if not pid:
+            unmatched.append(pname)
+            continue
+        if stat == "td":
+            yes = next((v.get("Yes") or v.get("1+") for v in lines.values() if v.get("Yes") or v.get("1+")), None)
+            if yes:
+                out["players"].setdefault(pid, {})["td"] = {"yes": yes}
+                push(H["players"].setdefault(pid, {}).setdefault("td", []), [stamp, yes])
+                n_ok += 1
+        else:
+            bl = best_line(lines)
+            if bl:
+                out["players"].setdefault(pid, {})[stat] = {"line": bl[0], "over": bl[1], "under": bl[2]}
+                push(H["players"].setdefault(pid, {}).setdefault(stat, []), [stamp, bl[0], bl[1], bl[2]])
+                n_ok += 1
+    gl = {"fixtureId": fx["fixtureId"], "startTime": fx["startTime"]}
+    tl = best_line(gm.get("total", {}))
+    if tl:
+        gl["total"] = {"line": tl[0], "over": tl[1], "under": tl[2]}
+        push(H["game"].setdefault("total", []), [stamp, tl[0], tl[1], tl[2]])
+    if {p1, p2} == {g["away_team"], g["home_team"]}:
+        hc = best_line(gm.get("handicap", {}), "1", "2")
+        if hc:
+            gl["spread"] = {p1: {"line": hc[0], "price": hc[1]}, p2: {"line": -hc[0], "price": hc[2]}}
+            push(H["game"].setdefault("spread", {}).setdefault(p1, []), [stamp, hc[0], hc[1]])
+            push(H["game"].setdefault("spread", {}).setdefault(p2, []), [stamp, -hc[0], hc[2]])
+        w = next((v for v in gm.get("winner", {}).values() if "1" in v and "2" in v), None)
+        if w:
+            gl["moneyline"] = {p1: w["1"], p2: w["2"]}
+            push(H["game"].setdefault("moneyline", {}).setdefault(p1, []), [stamp, w["1"]])
+            push(H["game"].setdefault("moneyline", {}).setdefault(p2, []), [stamp, w["2"]])
+    elif gm.get("handicap") or gm.get("winner"):
+        print("nie rozpoznano drużyn z pól fixture - pomijam spread i moneyline. Klucze:", list(fx))
+    out["games"][gid] = gl
+    print(f'{g["away_team"]} @ {g["home_team"]}: propsy z linią: {n_ok}, total: {gl.get("total")}')
 
-cur = df.filter(pl.col("season") == df["season"].max())
+# --- mecze rozpoczęte: rynki wstrzymane, więc pokazujemy ostatnią znaną linię (zamykającą) z historii pomiarów ---
+for gid, gl in out["games"].items():
+    H, closed = hist[gid], []
+    if H["startTime"] > now_s:
+        continue
+    for pid, stats in H["players"].items():
+        for stat, rows in stats.items():
+            if stat not in out["players"].get(pid, {}) and rows:
+                r = rows[-1]
+                out["players"].setdefault(pid, {})[stat] = ({"yes": r[1], "closed": True} if stat == "td" else
+                                                            {"line": r[1], "over": r[2], "under": r[3], "closed": True})
+    if "total" not in gl and H["game"].get("total"):
+        r = H["game"]["total"][-1]
+        gl["total"] = {"line": r[1], "over": r[2], "under": r[3]}
+        closed.append("total")
+    for key in ("spread", "moneyline"):
+        if key not in gl and H["game"].get(key):
+            vals = {t: v[-1] for t, v in H["game"][key].items()}
+            gl[key] = {t: ({"line": r[1], "price": r[2]} if key == "spread" else r[1]) for t, r in vals.items()}
+            closed.append(key)
+    if closed:
+        gl["closed"] = closed
 
-# --- historyczna pozycja w depth chartcie: ostatni zapis z nflverse sprzed daty meczu ---
-hist_rank = None
-try:
-    TFIX = {"LAR": "LA", "WSH": "WAS", "JAC": "JAX", "OAK": "LV", "SD": "LAC", "STL": "LA", "ARZ": "ARI",
-            "BLT": "BAL", "CLV": "CLE", "HST": "HOU"}
-    cs = int(df["season"].max())
-    dch = (nfl.load_depth_charts([cs]).filter(pl.col("position").is_in(POS), pl.col("gsis_id").is_not_null())
-             .with_columns(pl.col("team").replace(TFIX), pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64),
-                           pl.col("dt").cast(pl.Utf8).alias("dts")))
-    sc = nfl.load_schedules([cs]).filter(pl.col("game_type") == "REG").with_columns(pl.col("gameday").cast(pl.Utf8))
-    gd = (pl.concat([sc.select(["season", "week", pl.col("home_team").alias("team"), "gameday"]),
-                     sc.select(["season", "week", pl.col("away_team").alias("team"), "gameday"])])
-            .with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)))
-    k = ["season", "week", "team"]
-    dch = (dch.join(gd, on=k, how="inner").filter(pl.col("dts").str.slice(0, 10) <= pl.col("gameday"))
-              .filter(pl.col("dts") == pl.col("dts").max().over(k))
-              .sort(["pos_rank", "pos_slot"])
-              .unique(subset=k + ["position", "gsis_id"], keep="first", maintain_order=True)
-              .with_columns((pl.int_range(pl.len()).over(k + ["position"]) + 1).alias("depth_rank")))
-    hist_rank = dch.select(k + ["position", pl.col("gsis_id").alias("player_id"), "depth_rank"])
-    print("historyczny depth chart:", hist_rank.height, "rekordów")
-except Exception as e:
-    print("brak historycznego depth chartu (użyję obecnego):", e)
-for team in cur["opponent_team"].unique().to_list():
-    sub = cur.filter(pl.col("opponent_team") == team)
-    weeks = sorted(sub["week"].unique().to_list())[-8:]
-    sub = sub.filter(pl.col("week").is_in(weeks))
-    allowed = (sub.group_by(["week", "position"]).agg([pl.col(c).sum() for c in stats])
-                  .group_by("position").agg([pl.col(c).mean().round(1) for c in stats]))
-    recent = sub.filter((pl.col("attempts") >= 10) | (pl.col("carries") >= 5) | (pl.col("targets") >= 3))
-    if hist_rank is not None:
-        recent = recent.with_columns(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64)).join(
-            hist_rank, on=["season", "week", "team", "position", "player_id"], how="left")
-    (OUT / "defense" / f"{team}.json").write_text(json.dumps({
-        "allowed": {r["position"]: {c: r[c] for c in stats} for r in allowed.to_dicts()},
-        "recent": recent.sort(["week"], descending=True).select(["player_id"] + base + stats + (["depth_rank"] if "depth_rank" in recent.columns else [])).to_dicts()}))
+# --- zapis wyników (przed uzupełnianiem historii, żeby ewentualny błąd nie zniszczył bieżących linii) ---
+cutoff = fmt(utc - dt.timedelta(days=21))
 
-# --- terminarz: najbliższa kolejka ---
-season = int(df["season"].max())
-import datetime as _dt
-sch = (nfl.load_schedules(SEASONS).filter(pl.col("game_type") == "REG")
-          .with_columns(pl.col("gameday").cast(pl.Utf8)))
-todo = sch.filter(pl.col("home_score").is_null())
-games = []
-if todo.height:
-    # wszystkie jeszcze nierozegrane mecze z najbliższych 8 dni (także z następnego tygodnia, np. czwartkowy)
-    games = (todo.filter(pl.col("gameday") <= str(_dt.date.today() + _dt.timedelta(days=8))).sort("gameday")
-                 .select(["game_id", "season", "week", "gameday", "away_team", "home_team"]
-                         + [c for c in ("spread_line", "total_line", "roof", "away_rest", "home_rest", "div_game", "surface", "gametime") if c in todo.columns]).to_dicts())
-(OUT / "schedule.json").write_text(json.dumps(games))
-# pełny terminarz najnowszego sezonu (także rozegrane mecze) - dla odds_data.py (przypisanie zakończonych meczów)
-(OUT / "schedule_all.json").write_text(json.dumps(
-    sch.filter(pl.col("season") == pl.col("season").max()).select(["game_id", "season", "week", "gameday", "away_team", "home_team"]).to_dicts()))
 
-# --- statusy: raport kontuzji (OUT / D / Q) i lista rezerwowa kontuzjowanych (IR) ---
-LAB = {"out": "OUT", "doubtful": "D", "questionable": "Q"}
-status = {}  # gsis_id -> {"status", "injury"}
-try:
-    inj = nfl.load_injuries([season]).filter(pl.col("season_type") == "REG")
-    weeks = inj["week"].unique().to_list()
-    wk = games[0]["week"] if games and games[0]["week"] in weeks else inj["week"].max()
-    for r in inj.filter(pl.col("week") == wk).to_dicts():
-        st = LAB.get(str(r.get("report_status") or "").strip().lower())
-        if st and r.get("gsis_id"):
-            status[r["gsis_id"]] = {"status": st, "injury": r.get("report_primary_injury") or ""}
-    print("raport kontuzji: tydzień", wk, "-", len(status), "zawodników ze statusem")
-except Exception as e:
-    print("brak raportu kontuzji:", e)
-try:
-    ros = nfl.load_rosters_weekly([season])
-    ros = ros.filter(pl.col("week") == ros["week"].max())
-    print("statusy w rosterze (sprawdź, który oznacza IR):", ros["status"].unique().to_list())
-    for r in ros.filter(pl.col("status") == "RES").to_dicts():
-        status[r["gsis_id"]] = {"status": "IR", "injury": ""}
-except Exception as e:
-    print("brak rosterów tygodniowych:", e)
+def save():
+    """Zapisuje mapę zawodników, historię (bez meczów starszych niż 21 dni) i odds.json (tylko gdy są bieżące mecze)."""
+    MAPFILE.write_text(json.dumps(pmap, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    keep = {k: v for k, v in hist.items() if v["startTime"] >= cutoff}
+    (DATA / "odds_history.json").write_text(json.dumps(keep, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+    if out["games"]:
+        (DATA / "odds.json").write_text(json.dumps(out, ensure_ascii=False), encoding="utf-8")
 
-# --- ESPN (nieoficjalne API): depth chart i statusy; nadpisują dane nflverse ---
-depth_raw = {}
-try:
-    from espn import fetch_espn
-    depth_raw, esp_status = fetch_espn(season, players, TOP)
-    status.update(esp_status)
-    print("ESPN: depth chart dla", len(depth_raw), "drużyn,", len(esp_status), "statusów")
-except Exception as e:
-    print("ESPN niedostępny, zostają dane nflverse:", e)
 
-def entry(pid, name, **kw):
-    """Tworzy wpis zawodnika do depth.json: id, nazwisko, status kontuzji (Q/D/OUT/IR) i jej opis oraz dodatkowe
-    pola (np. usage).
-    """
-    st = status.get(pid, {})
-    return {"player_id": pid, "name": name, "status": st.get("status", ""), "injury": st.get("injury", ""), **kw}
+save()
 
-# --- depth chart: oficjalny z nflverse, a gdy niedostępny - ranking według użycia z 4 meczów ---
-depth = {t: {p: [entry(i, n) for i, n in l] for p, l in d.items()} for t, d in depth_raw.items()}
-try:
-    if depth:
-        raise RuntimeError('ESPN już dostarczył depth chart')
-    dc = nfl.load_depth_charts([season]).filter(pl.col("position").is_in(POS))
-    dc = dc.filter(pl.col("dt") == pl.col("dt").max().over("team")).sort(["pos_rank", "pos_slot"])
-    for team in dc["team"].unique().to_list():
-        t = dc.filter(pl.col("team") == team)
-        depth[team] = {p: [entry(r["gsis_id"], r["player_name"]) for r in
-                           t.filter(pl.col("position") == p).unique(subset=["gsis_id"], keep="first", maintain_order=True)
-                            .head(n).to_dicts()] for p, n in TOP.items()}
-    print("depth chart: oficjalny,", len(depth), "drużyn")
-except Exception as e:
-    print("oficjalny depth chart niedostępny:", e)
-if not depth:
-    usage = (pl.when(pl.col("position") == "QB").then(pl.col("attempts"))
-               .when(pl.col("position") == "RB").then(pl.col("carries") + pl.col("targets"))
-               .otherwise(pl.col("targets")))
-    for team in cur["team"].unique().to_list():
-        t = cur.filter(pl.col("team") == team)
-        t = t.filter(pl.col("week") > t["week"].max() - 4).with_columns(usage.alias("usage"))
-        u = t.group_by("player_id").agg(pl.col("player_display_name").last().alias("name"),
-                                        pl.col("position").last().alias("pos"),
-                                        pl.col("usage").mean().round(1).alias("usage"))
-        depth[team] = {p: [entry(r["player_id"], r["name"], usage=r["usage"]) for r in
-                           u.filter(pl.col("pos") == p).sort("usage", descending=True).head(n).to_dicts()]
-                       for p, n in TOP.items()}
-    print("depth chart: zastępczy (użycie z ostatnich 4 meczów)")
-# --- zawodnicy na IR nie są w depth chartach: dopisujemy ich na koniec listy pozycji ---
-rows = {r["player_id"]: r for r in players.to_dicts()}
-added = []
-for pid, st in status.items():
-    r = rows.get(pid)
-    lst = depth.get(r["team"], {}).get(r["pos"]) if r else None
-    if st["status"] == "IR" and lst is not None and all(x["player_id"] != pid for x in lst):
-        lst.append(entry(pid, r["name"]))
-        added.append(f'{r["team"]}: {r["name"]}')
-print("IR dopisani z nflverse:", added)
-(OUT / "depth.json").write_text(json.dumps(depth))
-print("gotowe:", len(keep), "zawodników,", len(games), "meczów w najbliższej kolejce")
 
-# --- usage: targety i carries w kolejnych meczach drużyn (bieżący sezon) ---
-usage_out = {}
-for team in cur["team"].unique().to_list():
-    t = cur.filter(pl.col("team") == team)
-    rows = {}
-    for r in t.select(["player_id", "player_display_name", "position", "week", "targets", "carries"]).to_dicts():
-        d = rows.setdefault(r["player_id"], {"player_id": r["player_id"], "name": r["player_display_name"],
-                                             "pos": r["position"], "g": {}})
-        d["g"][r["week"]] = [int(r["targets"] or 0), int(r["carries"] or 0)]
-    usage_out[team] = {"weeks": sorted(t["week"].unique().to_list()),
-                       "dates": {int(w): d for w, d in zip(t["week"].to_list(), t["date"].to_list())},
-                       "players": [p for p in rows.values() if any(v[0] or v[1] for v in p["g"].values())]}
-(OUT / "usage.json").write_text(json.dumps(usage_out))
-print("usage:", len(usage_out), "drużyn")
+def game_for(fx):
+    """Mecz z pełnego terminarza dla zakończonego fixture: obie drużyny z nazw uczestników i data (+/- 1 dzień, bo mecze nocne są następnego dnia UTC)."""
+    p1, p2 = team_of(fx.get("participant1Name")), team_of(fx.get("participant2Name"))
+    d0 = dt.date.fromisoformat(fx["startTime"][:10])
+    for g in all_games:
+        if p1 and p2 and {p1, p2} == {g["away_team"], g["home_team"]} and abs((dt.date.fromisoformat(g["gameday"]) - d0).days) <= 1:
+            return g, p1, p2
+    return None, p1, p2
 
-# --- coverage i ścieżki (FTN / nflverse); opcjonalne, nie blokuje reszty danych ---
-try:
-    from coverage_data import build_coverage
-    build_coverage(OUT, int(df["season"].max()))
-except Exception as e:
-    print("dane o coverage pominięte:", e)
 
-# --- dane bieżącego sezonu z play-by-play (strefy targetów, blitz); opcjonalne ---
-try:
-    from inseason_data import build_inseason
-    build_inseason(OUT, int(df["season"].max()))
-except Exception as e:
-    print("dane bieżącego sezonu pominięte:", e)
+# --- zakończone mecze: przypisanie do terminarza i pełna historia od otwarcia do zamknięcia z darmowego historical-odds ---
+for fx in fixtures:
+    if fx["startTime"] > finished_s:
+        continue
+    g, p1, p2 = game_for(fx)
+    if not g:
+        continue
+    H = hist.setdefault(g["game_id"], {"fixtureId": fx["fixtureId"], "startTime": fx["startTime"], "away": g["away_team"],
+                                       "home": g["home_team"], "p1": p1, "p2": p2, "full": False, "players": {}, "game": {}})
+    if not H.get("fixtureId"):
+        H["fixtureId"] = fx["fixtureId"]
+    H["p1"], H["p2"] = H.get("p1") or p1, H.get("p2") or p2
+done = 0
+for gid, H in sorted(hist.items(), key=lambda kv: kv[1]["startTime"], reverse=True):
+    if H.get("full") or not H.get("fixtureId") or not H.get("away") or H["startTime"] > finished_s or done >= 8:
+        continue
+    try:
+        book = (call("historical-odds", fixtureId=H["fixtureId"], bookmakers=BOOK).get("bookmakers") or {}).get(BOOK)
+        if not book:
+            continue
+        props, gm = collect(book)
+        ids = {**by_team.get(H["away"], {}), **by_team.get(H["home"], {})}
+        hp, gh = {}, {}
+        for (pname, stat), lines in props.items():
+            pid = find(ids, pname)
+            if not pid:
+                continue
+            if stat == "td":
+                ents = next((v.get("Yes") or v.get("1+") for v in lines.values() if v.get("Yes") or v.get("1+")), None)
+                rows, _ = timeline_one(ents) if ents else ([], False)
+            else:
+                rows, _ = timeline(lines, "Over", "Under")
+            if rows:
+                hp.setdefault(pid, {})[stat] = rows
+        tot, _ = timeline(gm.get("total", {}), "Over", "Under")
+        if tot:
+            gh["total"] = tot
+        p1, p2 = H.get("p1"), H.get("p2")
+        if {p1, p2} == {H["away"], H["home"]}:
+            hc, _ = timeline(gm.get("handicap", {}), "1", "2")
+            if hc:
+                gh["spread"] = {p1: [[t, h, a] for t, h, a, b in hc], p2: [[t, -h, b] for t, h, a, b in hc]}
+            ml, _ = timeline(gm.get("winner", {}), "1", "2")
+            if ml:
+                gh["moneyline"] = {p1: [[t, a] for t, h, a, b in ml], p2: [[t, b] for t, h, a, b in ml]}
+        H["players"], H["game"], H["full"] = hp, gh, True
+        done += 1
+        print(f"uzupełniono pełną historię meczu {gid}: {len(hp)} zawodników")
+    except RuntimeError as e:
+        print("historia meczu", gid, "niedostępna:", e)
+        if "REQUEST_LIMIT_EXCEEDED" in str(e) or "zapytań na uruchomienie" in str(e):
+            break
+    except Exception as e:  # błąd w jednym meczu nie przerywa reszty
+        print("błąd przetwarzania historii meczu", gid, ":", repr(e))
 
-# --- red zone i linia bramkowa z play-by-play; opcjonalne ---
-try:
-    from redzone_data import build_redzone
-    build_redzone(OUT, int(df["season"].max()))
-except Exception as e:
-    print("red zone pominięty:", e)
+# --- końcowy zapis i podsumowanie ---
+save()
+if not out["games"]:
+    print("Nie pobrano żadnych bieżących kursów - zostawiam poprzedni odds.json.")
+    sys.exit(1)
+print(f"zapisano: {len(out['games'])} meczów, {len(out['players'])} zawodników, historia: {len(hist)} meczów; zapytań użytych: {calls}")
+if unmatched:
+    print("niedopasowani zawodnicy (", len(unmatched), "):", sorted(set(unmatched))[:25])
 
-# --- Gridiris: alignment, ścieżki i krycie (est.) z ręcznie importowanych meczów (ingest/gridiris/*.json); opcjonalne ---
-try:
-    from gridiris_data import build_gridiris
-    build_gridiris(OUT)
-except Exception as e:
-    print("gridiris pominięty:", e)
-
-# --- ranking value: propsy Superbet kontra historia zawodników (value.json); opcjonalne ---
+# --- ranking value: przelicza value.json po każdym odświeżeniu kursów ---
 try:
     from value_data import build_value
-    build_value(OUT)
+    build_value(DATA)
 except Exception as e:
     print("ranking value pominięty:", e)
