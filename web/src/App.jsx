@@ -453,7 +453,7 @@ function valueOf(pr,win,minN,force){
  * Ranking value dla całej kolejki: propsy Superbet, w których historyczna trafność zawodnika odbiega od szansy z kursu.
  * Filtry: okno (L5/L10/L20/sezon), minimalna próbka, statystyka, mecz, strona i „tylko EV dodatnie”. Nazwisko otwiera kartę zawodnika.
  */
-function ValuePage({vl,games,onBack,pick}){
+function ValuePage({vl,games,onBack,pick,onAdd,mineKeys}){
   const [win,setWin]=useState(10),[minN,setMinN]=useState(5),[stat,setStat]=useState(""),[gid,setGid]=useState(""),[side,setSide]=useState(""),[pos,setPos]=useState(true);
   if(!vl||!vl.props?.length)return <><button className="back" onClick={onBack}>← Wróć</button><h1>Ranking value</h1><p className="mu">Brak danych. Ranking powstaje z kursów Superbet i logów zawodników po odświeżeniu danych (build_data.py i odds_data.py).</p></>;
   const stats=[...new Set(vl.props.map(x=>x.stat))],gids=[...new Set(vl.props.map(x=>x.gid))];
@@ -472,11 +472,90 @@ function ValuePage({vl,games,onBack,pick}){
         <select value={stat} onChange={e=>setStat(e.target.value)} aria-label="Statystyka"><option value="">Statystyka: wszystkie</option>{stats.map(s=><option key={s} value={s}>{VLAB[s]||s}</option>)}</select>
         <select value={gid} onChange={e=>setGid(e.target.value)} aria-label="Mecz"><option value="">Mecz: wszystkie</option>{gids.map(id=><option key={id} value={id}>{glabel(id)}</option>)}</select></div></section>
     <section className="card"><h2>Propsy według przewagi <small>{rows.length} z {vl.props.length}</small></h2>
-      {rows.length?<Plain head={["Zawodnik","Mecz","Statystyka","Linia","Strona","Kurs","Szansa z kursu","Trafność","Szac. szansa","Przewaga (pp)","EV %"]} rows={rows.map(({x,r})=>[
+      {rows.length?<Plain head={["Zawodnik","Mecz","Statystyka","Linia","Strona","Kurs","Szansa z kursu","Trafność","Szac. szansa","Przewaga (pp)","EV %","Dziennik"]} rows={rows.map(({x,r})=>{const sd=r.side==="TD"?"Yes":r.side,key=`${x.gid}|${x.id}|${x.stat}|${sd}`,added=mineKeys?.has(key);return [
         <button className="link" onClick={()=>pick({player_id:x.id,name:x.name,pos:x.pos},x.team,{s:"",inj:""})}>{x.name}</button>,
         `${x.team} vs ${x.opp}`,VLAB[x.stat]||x.stat,x.line!=null?<>{x.line}{x.l0!=null&&x.l0!==x.line&&<span className="mu"> (otw. {x.l0})</span>}</>:"–",r.side,r.odds,
-        pc1(r.imp*100),`${r.h}/${r.n} (${Math.round(r.h/r.n*100)}%)`,pc1(r.pe*100),colr(r.edge),colr(r.ev)])}/>:<p className="mu">Brak propsów spełniających filtry. Zmniejsz minimalną próbkę albo wyłącz „Tylko EV dodatnie”.</p>}
+        pc1(r.imp*100),`${r.h}/${r.n} (${Math.round(r.h/r.n*100)}%)`,pc1(r.pe*100),colr(r.edge),colr(r.ev),
+        <button className="chip" disabled={added} title="Dodaj do dziennika" onClick={()=>onAdd({k:key,ts:new Date().toISOString(),id:x.id,name:x.name,pos:x.pos,team:x.team,opp:x.opp,gid:x.gid,stat:x.stat,side:sd,line:x.line,odds:r.odds,imp:r.imp,pe:r.pe,ev:r.ev,n:r.n,res:null})}>{added?"✓":"+"}</button>]})}/>:<p className="mu">Brak propsów spełniających filtry. Zmniejsz minimalną próbkę albo wyłącz „Tylko EV dodatnie”.</p>}
       <p className="mu" style={{fontSize:12}}>Metoda: szansa z kursu to kursy Over i Under bez marży (dla anytime TD 1/kurs, więc z marżą). Trafność to odsetek meczów w oknie ponad linią (Over) albo poniżej (Under); dla TD mecze z przynajmniej jednym TD. Szacowana szansa łączy trafność z szansą z kursu (6 fikcyjnych meczów), żeby małe próbki nie zawyżały wyniku. EV = szac. szansa x kurs − 1. To prosty model oparty tylko na historii wyników: nie uwzględnia rywala, składu, pogody ani tego, że linia bukmachera zawiera już te informacje. Duże wartości przy małych próbkach traktuj ostrożnie, a to nie jest rekomendacja zakładu.</p></section>
+  </>;
+}
+
+/**
+ * Wynik typu na podstawie logu zawodnika: wiersz z sezonu i tygodnia zapisanych w id meczu (gid). Zwraca {res: W/L/P, val, profit} (zysk w jednostkach
+ * przy stawce 1) albo null, gdy meczu jeszcze nie ma w logu.
+ */
+function settleOne(p,rows){
+  const [season,week]=p.gid.split("_").slice(0,2).map(Number);
+  const row=rows.find(r=>r.season===season&&r.week===week);
+  if(!row)return null;
+  const v=val(row,p.stat);
+  const res=p.side==="Yes"?(v>0?"W":"L"):p.side==="Over"?(v>p.line?"W":v<p.line?"L":"P"):(v<p.line?"W":v>p.line?"L":"P");
+  return {res,val:v,profit:res==="W"?+(p.odds-1).toFixed(3):res==="L"?-1:0};
+}
+
+/**
+ * Linia zamykająca typu (ostatni zapisany pomiar z historii linii) i CLV w procentach: kurs typu wobec uczciwego kursu zamykającego tej samej linii
+ * (bez marży; dla anytime TD kurs zamykający wprost). CLV jest null, gdy linia się zmieniła; cały wynik null, gdy brak pomiarów.
+ */
+function closingOf(p,hist){
+  const rows=hist?.[p.gid]?.players?.[p.id]?.[p.stat];
+  if(!rows?.length)return null;
+  const r=rows[rows.length-1];
+  if(p.side==="Yes")return {odds:r[1],clv:+((p.odds/r[1]-1)*100).toFixed(1)};
+  if(r[1]!==p.line)return {line:r[1],clv:null};
+  const a=1/r[2],b=1/r[3],pc=(p.side==="Over"?a:b)/(a+b);
+  return {line:r[1],clv:+((p.odds*pc-1)*100).toFixed(1)};
+}
+
+/** Przedziały szacowanej szansy w tabeli kalibracji: [od, do, etykieta]. */
+const BUCKETS=[[0,.5,"poniżej 50%"],[.5,.55,"50–55%"],[.55,.6,"55–60%"],[.6,.65,"60–65%"],[.65,1.01,"65% i więcej"]];
+
+/** Podsumowanie listy typów: liczba rozliczonych, W/L/P, trafność (bez pushy), zysk i ROI przy stawce 1, średnia szacowana szansa i średnie CLV. */
+function summarize(rows){
+  const s=rows.filter(p=>p.res),w=s.filter(p=>p.res==="W").length,l=s.filter(p=>p.res==="L").length,pu=s.filter(p=>p.res==="P").length;
+  const profit=s.reduce((a,p)=>a+(p.profit??(p.res==="W"?p.odds-1:p.res==="L"?-1:0)),0),cl=s.filter(p=>p.clv!=null);
+  return {n:s.length,w,l,pu,hit:w+l?w/(w+l):null,profit,roi:s.length?profit/s.length*100:null,
+    pe:s.length?s.reduce((a,p)=>a+p.pe,0)/s.length:null,clv:cl.length?cl.reduce((a,p)=>a+p.clv,0)/cl.length:null,pending:rows.length-s.length};
+}
+
+/**
+ * Dziennik typów i kalibracja: przełącznik między automatycznym logiem modelu (value_log.json, typy z dodatnim EV zapisane przed meczem i rozliczone
+ * po nim) a moimi typami zapisanymi w przeglądarce (dodawane z rankingu value). Pokazuje podsumowanie (trafność, ROI, CLV), kalibrację
+ * (szacowana szansa kontra faktyczna trafność) i listę typów; moje typy można eksportować i importować jako plik JSON.
+ */
+function JournalPage({vlog,mine,setMine,onBack,pick}){
+  const [src,setSrc]=useState("model");
+  const rows=src==="model"?(vlog?.picks||[]):mine,s=summarize(rows);
+  const exportJson=()=>{const b=new Blob([JSON.stringify(mine,null,1)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(b);a.download="moje-typy.json";a.click();URL.revokeObjectURL(a.href)};
+  const importJson=e=>{const f=e.target.files?.[0];if(!f)return;const r=new FileReader();
+    r.onload=()=>{try{const arr=JSON.parse(r.result);if(Array.isArray(arr))setMine(ms=>{const ks=new Set(ms.map(x=>x.k));return [...ms,...arr.filter(x=>x&&x.k&&!ks.has(x.k))]})}catch{}};r.readAsText(f);e.target.value=""};
+  const stat=(l,v)=><div><span className="mu">{l}</span><b>{v}</b></div>;
+  const cal=BUCKETS.map(([a,b,l])=>{const t=rows.filter(p=>(p.res==="W"||p.res==="L")&&p.pe>=a&&p.pe<b),h=t.filter(p=>p.res==="W").length,pe=t.length?t.reduce((x,p)=>x+p.pe,0)/t.length:null;
+    return [l,t.length,pe!=null?pc1(pe*100):"–",t.length?pc1(h/t.length*100):"–",t.length?<b style={{color:h/t.length-pe>=0?"var(--ac)":"var(--bad)"}}>{((h/t.length-pe)*100).toFixed(1)}</b>:"–"]});
+  const res=p=>p.res==="W"?<b style={{color:"var(--ac)"}}>W</b>:p.res==="L"?<b style={{color:"var(--bad)"}}>L</b>:p.res==="P"?<span className="mu">P</span>:"–";
+  const table=rows.slice(0,150).map(p=>[D((p.start||p.ts||"").slice(0,10),2),
+    <button className="link" onClick={()=>pick({player_id:p.id,name:p.name,pos:p.pos||""},p.team,{s:"",inj:""})}>{p.name}</button>,
+    `${VLAB[p.stat]||p.stat} ${p.side==="Yes"?"TAK":p.side}${p.line!=null?" "+p.line:""}`,p.odds,pc1(p.pe*100),p.ev!=null?p.ev.toFixed(1):"–",res(p),p.val??"–",p.profit??"–",p.clv!=null?p.clv.toFixed(1):"–",
+    ...(src==="mine"?[<button className="link" title="Usuń typ" onClick={()=>setMine(ms=>ms.filter(x=>x.k!==p.k))}>×</button>]:[])]);
+  return <>
+    <button className="back" onClick={onBack}>← Wróć</button>
+    <h1>Dziennik typów <span className="mu" style={{fontSize:18}}>wyniki, kalibracja i CLV</span></h1>
+    <section className="card"><h2>Źródło <small>{src==="model"?(vlog?`model: ${vlog.model}`:"brak danych"):"zapisane w tej przeglądarce"}</small></h2>
+      <div className="chips"><button className="chip" aria-pressed={src==="model"} onClick={()=>setSrc("model")}>Ranking (automatyczny log)</button>
+        <button className="chip" aria-pressed={src==="mine"} onClick={()=>setSrc("mine")}>Moje typy ({mine.length})</button>
+        {src==="mine"&&<><button className="chip" onClick={exportJson} disabled={!mine.length}>Eksportuj</button>
+          <label className="chip" style={{cursor:"pointer"}}>Importuj<input type="file" accept="application/json" onChange={importJson} style={{display:"none"}}/></label></>}</div>
+      <div className="stat">{stat("Rozliczone",s.n)}{stat("W–L–P",`${s.w}–${s.l}–${s.pu}`)}{stat("Trafność",s.hit!=null?pc1(s.hit*100):"–")}
+        {stat("Zysk (jedn.)",s.n?s.profit.toFixed(2):"–")}{stat("ROI",s.roi!=null?`${s.roi.toFixed(1)}%`:"–")}{stat("Śr. szac. szansa",s.pe!=null?pc1(s.pe*100):"–")}
+        {stat("Śr. CLV",s.clv!=null?`${s.clv.toFixed(1)}%`:"–")}{stat("Oczekujące",s.pending)}</div></section>
+    <section className="card"><h2>Kalibracja <small>czy szacowana szansa zgadza się z faktyczną trafnością</small></h2>
+      <Plain head={["Szacowana szansa","typy","średnia szacowana","faktyczna trafność","różnica (pp)"]} rows={cal}/>
+      <p className="mu" style={{fontSize:12}}>Typy rozliczone jako push są pominięte. Jeśli faktyczna trafność jest stale niższa od szacowanej, model zawyża szanse. Przy małej liczbie typów (poniżej kilkudziesięciu na przedział) różnice są głównie szumem.</p></section>
+    <section className="card"><h2>Typy <small>{rows.length}</small></h2>
+      {rows.length?<Plain head={["Data","Zawodnik","Typ","Kurs","Szac. szansa","EV %","Wynik","Wartość","Zysk","CLV %",...(src==="mine"?[""]:[])]} rows={table}/>
+        :<p className="mu">{src==="model"?"Log modelu jest jeszcze pusty. Wpisy pojawią się po najbliższym odświeżeniu kursów i będą rozliczane po meczach.":"Nie dodałeś jeszcze żadnych typów. Dodasz je przyciskiem „+” w rankingu value."}</p>}
+      <p className="mu" style={{fontSize:12}}>Zysk liczony przy stałej stawce 1 jednostki. Log modelu zapisuje typy z dodatnim EV (model v1) do chwili rozpoczęcia meczu, potem je zamraża i rozlicza z logów zawodników. CLV to przewaga kursu typu nad uczciwym kursem zamykającym tej samej linii (dodatnie = lepsza cena niż na zamknięciu); gdy linia się przesunęła, CLV nie jest liczone. Do końca meczu nie ma wyniku, więc typ jest „oczekujący”.</p></section>
   </>;
 }
 
@@ -608,15 +687,27 @@ export default function App(){
    * kursy, red zone, Gridiris i bieżący widok.
    */
   const [games,setGames]=useState(null),[depth,setDepth]=useState({}),[g,setG]=useState(null),[p,setP]=useState(null),[log,setLog]=useState([]),
-    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null),[gt,setGt]=useState(null),[gdf,setGdf]=useState(null),[vl,setVl]=useState(null),[view,setView]=useState("");
+    [def,setDef]=useState(null),[cov,setCov]=useState(null),[pc,setPc]=useState(null),[usage,setUsage]=useState(null),[odds,setOdds]=useState(null),[hist,setHist]=useState(null),[ins,setIns]=useState(null),[pz,setPz]=useState(null),[rz,setRz]=useState(null),[gd,setGd]=useState(null),[gp,setGp]=useState(null),[gt,setGt]=useState(null),[gdf,setGdf]=useState(null),[vl,setVl]=useState(null),[vlog,setVlog]=useState(null),[mine,setMine]=useState(()=>{try{return JSON.parse(localStorage.getItem("nfl_picks")||"[]")}catch{return []}}),[view,setView]=useState("");
   /**
    * Jednorazowe wczytanie wspólnych plików danych (terminarz, depth charty, usage, krycia, kursy, historia
    * linii, red zone, Gridiris).
    */
   useEffect(()=>{get("/data/schedule.json").then(s=>{setGames(s);setG(s[0]||null)}).catch(()=>setGames([]));
     get("/data/depth.json").then(setDepth).catch(()=>{});get("/data/usage.json").then(setUsage).catch(()=>{});
-    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/gridiris/teams.json").then(setGt).catch(()=>{});get("/data/gridiris/defenders.json").then(setGdf).catch(()=>{});get("/data/value.json").then(setVl).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
-  /** Rywal zawodnika w wybranym meczu; pusty, gdy jego drużyna w nim nie gra. */
+    get("/data/coverage/defense.json").then(setCov).catch(()=>{});get("/data/inseason/defense.json").then(setIns).catch(()=>{});get("/data/redzone.json").then(setRz).catch(()=>{});get("/data/gridiris/defense.json").then(setGd).catch(()=>{});get("/data/gridiris/teams.json").then(setGt).catch(()=>{});get("/data/gridiris/defenders.json").then(setGdf).catch(()=>{});get("/data/value.json").then(setVl).catch(()=>{});get("/data/value_log.json").then(setVlog).catch(()=>{});get("/data/odds.json").then(setOdds).catch(()=>{});get("/data/odds_history.json").then(setHist).catch(()=>{})},[]);
+    /** Zapisuje moje typy w przeglądarce (localStorage). */
+  useEffect(()=>{try{localStorage.setItem("nfl_picks",JSON.stringify(mine))}catch{}},[mine]);
+  /** Po otwarciu dziennika rozlicza moje nierozliczone typy z logów zawodników i dolicza CLV z historii linii. */
+  useEffect(()=>{
+    if(view!=="journal")return;
+    const ids=[...new Set(mine.filter(p=>!p.res).map(p=>p.id))];
+    if(!ids.length)return;
+    Promise.all(ids.map(id=>get(`/data/logs/${id}.json`).then(r=>[id,r]).catch(()=>[id,[]]))).then(rs=>{
+      const logs=Object.fromEntries(rs);
+      setMine(ms=>ms.map(p=>{if(p.res)return p;const s=settleOne(p,logs[p.id]||[]);if(!s)return p;const c=closingOf(p,hist);return {...p,...s,cl:c,clv:c?.clv??null}}));
+    });
+  },[view]);
+/** Rywal zawodnika w wybranym meczu; pusty, gdy jego drużyna w nim nie gra. */
   const opp=p&&g?(p.team===g.home_team?g.away_team:p.team===g.away_team?g.home_team:""):"";
   /** Po wyborze zawodnika wczytuje jego log meczów, krycia FTN, strefy i dane Gridiris. */
   useEffect(()=>{setLog([]);setPc(null);setPz(null);setGp(null);if(!p)return;
@@ -633,7 +724,9 @@ export default function App(){
   /** Otwiera kartę zawodnika, ustawia mecz jego drużyny i przewija stronę na górę. */
   const pick=(x,team,l)=>{setP({player_id:x.player_id,name:x.name,pos:x.pos,team,status:l.s,injury:l.inj});
     const gm=(games||[]).find(m=>m.home_team===team||m.away_team===team);if(gm)setG(gm);setView("");window.scrollTo(0,0)};
-  /** Karta depth chartu drużyny z klikalnymi zawodnikami, rangami i statusami. */
+    /** Dodaje typ do moich typów (bez duplikatów); zapis do localStorage robi efekt powyżej. */
+  const addPick=p=>setMine(ms=>ms.some(x=>x.k===p.k)?ms:[p,...ms]);
+/** Karta depth chartu drużyny z klikalnymi zawodnikami, rangami i statusami. */
   const Depth=({team})=><section className="card"><h2>{team} <small>depth chart</small></h2>{POS.map(pos=><div key={pos} style={{marginBottom:8}}><span className="mu">{pos}</span>
     <div className="chips">{(depth[team]?.[pos]||[]).map((x,i)=><button key={x.player_id} className="chip" onClick={()=>pick({...x,pos},team,{s:x.status,inj:x.injury})}>
       <span className="mu">{pos}{i+1}</span> {x.name}<Badge s={x.status} inj={x.injury}/>{x.usage!=null&&<span className="mu"> {x.usage}</span>}</button>)}</div></div>)}</section>;
@@ -643,7 +736,8 @@ export default function App(){
     Źródła danych: statystyki, terminarze i składy – nflverse; dane o rodzajach krycia (coverage) i ścieżkach – FTN Data via nflverse, na licencji{" "}
     <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer" style={{color:"var(--ac)"}}>CC BY-SA 4.0</a>; alignment, ścieżki i krycie (est.) z bieżącego sezonu – Gridiris (dane NFL Next Gen Stats); depth charty i statusy kontuzji – ESPN.
     Kursy: Superbet (PL) via OddsPapi; mogą różnić się od aktualnych na stronie bukmachera. Aplikacja ma charakter informacyjny i nie gwarantuje wyników zakładów. Hazard wiąże się z ryzykiem, 18+.</footer>;
-  if(view==="value")return <main style={{maxWidth:"none"}}><ValuePage vl={vl} games={games} onBack={()=>setView("")} pick={pick}/>{footer}</main>;
+  if(view==="journal")return <main style={{maxWidth:"none"}}><JournalPage vlog={vlog} mine={mine} setMine={setMine} onBack={()=>setView("")} pick={pick}/>{footer}</main>;
+  if(view==="value")return <main style={{maxWidth:"none"}}><ValuePage vl={vl} games={games} onBack={()=>setView("")} pick={pick} onAdd={addPick} mineKeys={new Set(mine.map(p=>p.k))}/>{footer}</main>;
   if(view==="matchup"&&g)return <main style={{maxWidth:"none"}}><MatchupPage g={g} gd={gd} gt={gt} gdf={gdf} onBack={()=>setView("")} pick={pick}/>{footer}</main>;
   if(p&&g)return <main style={{maxWidth:"none"}}>
     <button className="back" onClick={()=>setP(null)}>← Wróć do meczu {g.away_team} @ {g.home_team}</button>
@@ -670,6 +764,6 @@ export default function App(){
   return <main><h1>NFL Edge</h1><p className="mu">Wybierz mecz, a potem zawodnika z depth chartu.</p>
     {!games.length&&<p className="mu">Brak nadchodzących meczów w terminarzu.</p>}
     <div className="chips">{games.map(x=><button key={x.game_id} className="chip" aria-pressed={g?.game_id===x.game_id} onClick={()=>setG(x)}>{x.away_team} @ {x.home_team} <span className="mu">{D(x.gameday,2)}</span></button>)}</div>
-    <div className="chips">{g&&<button className="chip" onClick={()=>setView("matchup")}>Alignment →</button>}<button className="chip" onClick={()=>setView("value")}>Ranking value →</button></div>
+    <div className="chips">{g&&<button className="chip" onClick={()=>setView("matchup")}>Alignment →</button>}<button className="chip" onClick={()=>setView("value")}>Ranking value →</button><button className="chip" onClick={()=>setView("journal")}>Dziennik →</button></div>
     {g&&<div className="grid"><Depth team={g.away_team}/><Depth team={g.home_team}/></div>}{footer}</main>;
 }
