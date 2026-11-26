@@ -1,1 +1,1 @@
-{"routes": {}, "cov": {}, "pass": {"MAN": {"dropbacks": 1, "att": 1.0, "cmp": 0.0, "yds": 0.0, "td": 0.0, "int": 0.0, "epa": -2.02}, "COVER_0": {"dropbacks": 1, "att": 1.0, "cmp": 0.0, "yds": 0.0, "td": 0.0, "int": 0.0, "epa": -2.02}}}
+{"routes": {}, "cov": {}, "pass": {"COVER_0": {"dropbacks": 1, "att": 1.0, "cmp": 0.0, "yds": 0.0, "td": 0.0, "int": 0.0, "epa": -2.02}, "MAN": {"dropbacks": 1, "att": 1.0, "cmp": 0.0, "yds": 0.0, "td": 0.0, "int": 0.0, "epa": -2.02}}}
