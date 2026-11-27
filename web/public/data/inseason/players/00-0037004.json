@@ -1,1 +1,1 @@
-{"zones": {"short:middle": {"targets": 3, "rec": 3.0, "yds": 22.0, "td": 0.0, "epa": 0.34}, "mid:left": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.42}, "mid:middle": {"targets": 1, "rec": 1.0, "yds": 11.0, "td": 0.0, "epa": 0.57}}}
+{"zones": {"mid:left": {"targets": 1, "rec": 0.0, "yds": 0.0, "td": 0.0, "epa": -0.42}, "mid:middle": {"targets": 1, "rec": 1.0, "yds": 11.0, "td": 0.0, "epa": 0.57}, "short:middle": {"targets": 3, "rec": 3.0, "yds": 22.0, "td": 0.0, "epa": 0.34}}}
